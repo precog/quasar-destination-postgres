@@ -21,7 +21,8 @@ import slamdata.Predef._
 import cats.effect.Sync
 
 import java.net.URI
-import java.time.format.DateTimeFormatter
+import java.time.format.{DateTimeFormatter, DateTimeFormatterBuilder, SignStyle}
+import java.time.temporal.ChronoField
 
 import quasar.api.push.RenderConfig
 import quasar.api.resource._
@@ -33,12 +34,40 @@ package object postgres {
   type Ident = String
   type Table = Ident
 
-  val PostgresCsvConfig: RenderConfig.Csv =
+  val PostgresCsvConfig: RenderConfig.Csv = {
+    val eraPattern = " G"
+
+    val time =
+      DateTimeFormatter.ofPattern("HH:mm:ss.S")
+
+    // mutable builder
+    def unsignedDate =
+      (new DateTimeFormatterBuilder())
+        .appendValue(ChronoField.YEAR_OF_ERA, 4, 19, SignStyle.NEVER)
+        .appendPattern("-MM-dd")
+
     RenderConfig.Csv(
       includeHeader = true,
-      offsetDateTimeFormat = DateTimeFormatter.ofPattern("MMM d, y HH:mm:ss.SZ G"),
-      localDateTimeFormat = DateTimeFormatter.ofPattern("MMM d, y HH:mm:ss.S G"),
-      localDateFormat = DateTimeFormatter.ofPattern("MMM d, y G"))
+
+      offsetDateTimeFormat =
+        unsignedDate
+          .appendLiteral(' ')
+          .append(time)
+          .appendPattern("Z" + eraPattern)
+          .toFormatter,
+
+      localDateTimeFormat =
+        unsignedDate
+          .appendLiteral(' ')
+          .append(time)
+          .appendPattern(eraPattern)
+          .toFormatter,
+
+      localDateFormat =
+        unsignedDate
+          .appendPattern(eraPattern)
+          .toFormatter)
+  }
 
   /** Returns a quoted and escaped version of `ident`. */
   def hygenicIdent(ident: Ident): Ident =

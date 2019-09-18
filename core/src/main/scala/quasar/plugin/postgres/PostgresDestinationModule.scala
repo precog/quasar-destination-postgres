@@ -30,7 +30,6 @@ import doobie.implicits._
 
 import eu.timepit.refined.auto._
 
-import java.net.URI
 import java.util.concurrent.Executors
 
 import quasar.api.destination.{DestinationError => DE, _}
@@ -38,7 +37,6 @@ import quasar.concurrent.{BlockingContext, NamedDaemonThreadFactory}
 import quasar.connector.{DestinationModule, MonadResourceErr}
 
 import scala.concurrent.ExecutionContext
-import scala.util.Random
 import scala.util.control.NonFatal
 
 import scalaz.syntax.tag._
@@ -75,12 +73,9 @@ object PostgresDestinationModule extends DestinationModule {
         Right(_))
 
     val validateConnection: ConnectionIO[Either[InitErr, Unit]] =
-      FC.isValid(ValidationTimeoutSeconds)
-        .map(v => if (!v) Left(connectionInvalid(config)) else Right(()))
-        .recover {
-          case NonFatal(ex: Exception) =>
-            Left(DE.connectionFailed[Json, InitErr](destinationType, config, ex))
-        }
+      FC.isValid(ValidationTimeoutSeconds) map { v =>
+        if (!v) Left(connectionInvalid(config)) else Right(())
+      }
 
     val init = for {
       cfg <- EitherT(cfg0.pure[Resource[F, ?]])
@@ -93,7 +88,10 @@ object PostgresDestinationModule extends DestinationModule {
 
       xa <- EitherT.right(hikariTransactor[F](cfg, awaitPool, xaPool))
 
-      _ <- EitherT(Resource.liftF(validateConnection.transact(xa)))
+      _ <- EitherT(Resource.liftF(validateConnection.transact(xa) recover {
+        case NonFatal(ex: Exception) =>
+          Left(DE.connectionFailed[Json, InitErr](destinationType, config, ex))
+      }))
 
     } yield new PostgresDestination(xa, WriteMode.Replace): Destination[F]
 
@@ -136,12 +134,6 @@ object PostgresDestinationModule extends DestinationModule {
       }
     }
   }
-
-  private def jdbcUri(pgUri: URI): String =
-    s"jdbc:${pgUri}"
-
-  private def randomAlphaNum[F[_]: Sync](size: Int): F[String] =
-    Sync[F].delay(Random.alphanumeric.take(size).mkString)
 
   private def transactPool[F[_]](name: String)(implicit F: Sync[F])
       : Resource[F, BlockingContext] = {

@@ -1,0 +1,23 @@
+version: "3.7"
+services:
+  postgres9:
+    image: postgres:9
+    network_mode: "bridge"
+    ports:
+      - "54322:5432"
+    environment:
+      POSTGRES_PASSWORD: "postgres"
+  postgres10:
+    image: postgres:10
+    network_mode: "bridge"
+    ports:
+      - "54322:5432"
+    environment:
+      POSTGRES_PASSWORD: "postgres"
+  postgres11:
+    image: postgres:11
+    network_mode: "bridge"
+    ports:
+      - "54322:5432"
+    environment:
+      POSTGRES_PASSWORD: "postgres"

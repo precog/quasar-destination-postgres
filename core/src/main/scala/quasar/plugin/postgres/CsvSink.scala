@@ -88,9 +88,6 @@ object CsvSink {
 
   ////
 
-  private type Ident = String
-  private type Table = Ident
-
   private def copyToTable(table: Table, columns: NonEmptyList[TableColumn]): Pipe[CopyManagerIO, Byte, Unit] = {
     val cols =
       columns
@@ -130,9 +127,6 @@ object CsvSink {
   private def dropTableIfExists(table: Table): ConnectionIO[Int] =
     (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygenicIdent(table))).update.run
 
-  private def hygenicIdent(ident: Ident): Ident =
-    s""""${ident.replace("\"", "\"\"")}""""
-
   private val pgColumnType: ColumnType.Scalar => Fragment = {
     case ColumnType.Null => fr0"smallint"
     case ColumnType.Boolean => fr0"boolean"
@@ -147,9 +141,4 @@ object CsvSink {
     case ColumnType.Number => fr0"numeric"
     case ColumnType.String => fr0"text"
   }
-
-  private def tableFromPath(p: ResourcePath): Option[Table] =
-    Some(p) collect {
-      case table /: ResourcePath.Root => table
-    }
 }

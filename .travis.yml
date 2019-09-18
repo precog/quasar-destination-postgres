@@ -7,6 +7,9 @@ stages:
   - name: publish
     if: NOT type = pull_request
 
+services:
+  - docker
+
 cache:
   directories:
     - $HOME/.ivy2/cache
@@ -14,6 +17,10 @@ cache:
     - $HOME/.coursier/cache
 
 env:
+  matrix:
+    - POSTGRES_MAJOR=9
+    - POSTGRES_MAJOR=10
+    - POSTGRES_MAJOR=11
   global:
     - COURSIER_PROGRESS=0
     - SBT=./sbt
@@ -31,6 +38,7 @@ jobs:
     - stage: test
       script:
         - set -e
+        - docker-compose up -d postgres${POSTGRES_MAJOR}
         - $SBT ++$TRAVIS_SCALA_VERSION test
 
     - stage: publish
@@ -44,6 +52,7 @@ jobs:
         depth: false
 
 after_success:
+  - scripts/checkAndAutoMerge
   - scripts/discordTravisPost success https://discordapp.com/api/webhooks/$DISCORD_WEBHOOK_TOKENS
 
 after_failure:

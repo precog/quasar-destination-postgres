@@ -22,18 +22,32 @@ object TemporalBounds {
   val MinLocalTime: LocalTime = LocalTime.MIN
   val MaxLocalTime: LocalTime = LocalTime.MAX.minusNanos(999)
 
-  val MinLocalDate: LocalDate = LocalDate.of(-4714, 11, 24)
+  val MinLocalDate: LocalDate = LocalDate.of(-4713, 11, 24)
   val MaxLocalDate: LocalDate = LocalDate.of(5874897, 12, 31)
 
   val MinLocalDateTime: LocalDateTime = MinLocalDate.atTime(MinLocalTime)
-  val MaxLocalDateTime: LocalDateTime = LocalDate.of(294276, 12, 31).atTime(MaxLocalTime)
+
+  // PG uses a fixed number of bits in the representation, so the larger the year
+  // the less available for fraction-of-second precision.
+  val MaxLocalDateTime: LocalDateTime =
+    LocalDate.of(294276, 12, 31)
+      .atTime(LocalTime.MAX.minusNanos(99999999))
 
   val MinOffset: ZoneOffset = ZoneOffset.ofHoursMinutes(14, 59)
-  val MaxOffset: ZoneOffset = ZoneOffset.ofHoursMinutes(-14, 59)
+  val MaxOffset: ZoneOffset = ZoneOffset.ofHoursMinutes(-14, -59)
 
   val MinOffsetTime: OffsetTime = MinLocalTime.atOffset(MinOffset)
   val MaxOffsetTime: OffsetTime = MaxLocalTime.atOffset(MaxOffset)
 
-  val MinOffsetDateTime: OffsetDateTime = MinLocalDateTime.atOffset(MinOffset)
-  val MaxOffsetDateTime: OffsetDateTime = MaxLocalDateTime.atOffset(MaxOffset)
+  val MinOffsetDateTime: OffsetDateTime =
+    MinLocalDateTime
+      .plusHours(14)
+      .plusMinutes(59)
+      .atOffset(MinOffset)
+
+  val MaxOffsetDateTime: OffsetDateTime =
+    MaxLocalDateTime
+      .minusHours(14)
+      .minusMinutes(59)
+      .atOffset(MaxOffset)
 }
