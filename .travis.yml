@@ -37,7 +37,7 @@ jobs:
   include:
     - stage: test
       script:
-        - docker-compose up -d postgres${POSTGRES_MAJOR}
+        - "docker-compose up -d postgres${POSTGRES_MAJOR}"
         - set -e
         - $SBT ++$TRAVIS_SCALA_VERSION test
 
