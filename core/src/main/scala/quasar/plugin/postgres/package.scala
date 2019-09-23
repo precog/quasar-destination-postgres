@@ -47,7 +47,8 @@ package object postgres {
         .appendPattern("-MM-dd")
 
     RenderConfig.Csv(
-      includeHeader = true,
+      includeHeader = false,
+      includeBom = false,
 
       offsetDateTimeFormat =
         unsignedDate
