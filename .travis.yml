@@ -1,5 +1,5 @@
 language: scala
-scala: 2.12.7
+scala: 2.12.10
 jdk: openjdk8
 
 stages:
@@ -32,6 +32,11 @@ env:
     - POSTGRES_MAJOR=9
     - POSTGRES_MAJOR=10
     - POSTGRES_MAJOR=11
+
+install:
+  - mkdir scripts
+  - $SBT transferCommonResources
+  - scripts/commonSetup
 
 script:
   - set -e
