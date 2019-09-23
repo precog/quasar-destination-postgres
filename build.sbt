@@ -33,6 +33,7 @@ lazy val core = project
       * `quasarPluginQuasarVersion`.
       */
     quasarPluginDependencies ++= Seq(
+      "org.slf4s"    %% "slf4s-api"       % "1.7.25",
       "org.tpolecat" %% "doobie-core"     % DoobieVersion,
       "org.tpolecat" %% "doobie-hikari"   % DoobieVersion,
       "org.tpolecat" %% "doobie-postgres" % DoobieVersion,

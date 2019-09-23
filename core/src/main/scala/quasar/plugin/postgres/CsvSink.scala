@@ -20,30 +20,41 @@ import slamdata.Predef.{Stream => _, _}
 
 import cats._
 import cats.data._
-import cats.effect.{Effect, ExitCase, LiftIO}
+import cats.effect.{Effect, ExitCase, LiftIO, Sync, Timer}
+import cats.effect.concurrent.Ref
 import cats.implicits._
 
 import doobie._
 import doobie.implicits._
 import doobie.postgres._
 import doobie.postgres.implicits._
+import doobie.util.log.{ExecFailure, ProcessingFailure, Success}
 
-import fs2.{Pipe, Stream}
+import fs2.{Chunk, Pipe, Stream}
+
+import java.lang.IllegalArgumentException
+
+import org.slf4s.Logging
 
 import quasar.connector._
 import quasar.api.resource._
 import quasar.api.table.{ColumnType, TableColumn}
 
-import java.lang.IllegalArgumentException
+import scala.concurrent.duration.MILLISECONDS
 
-object CsvSink {
+import shims._
+
+object CsvSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
       xa: Transactor[F],
       writeMode: WriteMode)(
       dst: ResourcePath,
       columns: List[TableColumn],
-      data: Stream[F, Byte])
+      data: Stream[F, Byte])(
+      implicit timer: Timer[F])
       : F[Unit] = {
+
+    val AE = ApplicativeError[F, Throwable]
 
     val table =
       tableFromPath(dst) match {
@@ -60,20 +71,36 @@ object CsvSink {
           cols.pure[F]
 
         case None =>
-          ApplicativeError[F, Throwable]
-            .raiseError(new IllegalArgumentException("No columns specified."))
+          AE.raiseError(new IllegalArgumentException("No columns specified."))
       }
 
-    (table product tableColumns) flatMap { case (tbl, cols) =>
-      val doCopy =
+    for {
+      tbl <- table
+
+      cols <- tableColumns
+
+      action = writeMode match {
+        case WriteMode.Create => "Creating"
+        case WriteMode.Replace => "Replacing"
+      }
+
+      _ <- debug[F](s"${action} '${tbl}' with schema ${cols.show}")
+
+      // Telemetry
+      totalBytes <- Ref[F].of(0L)
+      startAt <- timer.clock.monotonic(MILLISECONDS)
+
+      doCopy =
         data
+          .chunks
+          .evalTap(recordChunks[F](totalBytes))
           // TODO: Is there a better way?
           .translate(Effect.toIOK[F] andThen LiftIO.liftK[CopyManagerIO])
           .through(copyToTable(tbl, cols))
           .compile
           .drain
 
-      val ensureTable =
+      ensureTable =
         writeMode match {
           case WriteMode.Create =>
             createTable(tbl, cols)
@@ -82,13 +109,49 @@ object CsvSink {
             dropTableIfExists(tbl) >> createTable(tbl, cols)
         }
 
-      (ensureTable >> PHC.pgGetCopyAPI(doCopy)).transact(xa)
-    }
+      _ <- (ensureTable >> PHC.pgGetCopyAPI(doCopy)).transact(xa) handleErrorWith { t =>
+        error[F](s"COPY to '${tbl}' produced unexpected error: ${t.getMessage}", t) >>
+          AE.raiseError(t)
+      }
+
+      endAt <- timer.clock.monotonic(MILLISECONDS)
+      tbytes <- totalBytes.get
+
+      _ <- debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
+
+    } yield ()
   }
 
   ////
 
-  private def copyToTable(table: Table, columns: NonEmptyList[TableColumn]): Pipe[CopyManagerIO, Byte, Unit] = {
+  private val logHandler: LogHandler =
+    LogHandler {
+      case Success(q, _, e, p) =>
+        log.debug(s"SUCCESS: `$q` in ${(e + p).toMillis}ms (${e.toMillis} ms exec, ${p.toMillis} ms proc)")
+
+      case ExecFailure(q, _, e, t) =>
+        log.debug(s"EXECUTION_FAILURE: `$q` after ${e.toMillis} ms, detail: ${t.getMessage}", t)
+
+      case ProcessingFailure(q, _, e, p, t) =>
+        log.debug(s"PROCESSING_FAILURE: `$q` after ${(e + p).toMillis} ms (${e.toMillis} ms exec, ${p.toMillis} ms proc (failed)), detail: ${t.getMessage}", t)
+    }
+
+  private def error[F[_]: Sync](msg: => String, cause: => Throwable): F[Unit] =
+    Sync[F].delay(log.error(msg, cause))
+
+  private def debug[F[_]: Sync](msg: => String): F[Unit] =
+    Sync[F].delay(log.debug(msg))
+
+  private def trace[F[_]: Sync](msg: => String): F[Unit] =
+    Sync[F].delay(log.trace(msg))
+
+  private def logChunkSize[F[_]: Sync](c: Chunk[Byte]): F[Unit] =
+    trace[F](s"Sending ${c.size} bytes")
+
+  private def recordChunks[F[_]: Sync](total: Ref[F, Long])(c: Chunk[Byte]): F[Unit] =
+    total.update(_ + c.size) >> logChunkSize[F](c)
+
+  private def copyToTable(table: Table, columns: NonEmptyList[TableColumn]): Pipe[CopyManagerIO, Chunk[Byte], Unit] = {
     val cols =
       columns
         .map(c => hygenicIdent(c.name))
@@ -97,8 +160,10 @@ object CsvSink {
     val copyQuery =
       s"COPY ${hygenicIdent(table)} ($cols) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
 
+    val logStart = debug[CopyManagerIO](s"BEGIN COPY: `${copyQuery}`")
+
     val startCopy =
-      Stream.bracketCase(PFCM.copyIn(copyQuery)) { (pgci, exitCase) =>
+      Stream.bracketCase(PFCM.copyIn(copyQuery) <* logStart) { (pgci, exitCase) =>
         PFCM.embed(pgci, exitCase match {
           case ExitCase.Completed => PFCI.endCopy.void
           case _ => PFCI.isActive.ifM(PFCI.cancelCopy, PFCI.unit)
@@ -106,7 +171,7 @@ object CsvSink {
       }
 
     in => startCopy flatMap { pgci =>
-      in.chunks.map(_.toBytes) evalMap { bs =>
+      in.map(_.toBytes) evalMap { bs =>
         PFCM.embed(pgci, PFCI.writeToCopy(bs.values, bs.offset, bs.length))
       }
     }
@@ -121,11 +186,15 @@ object CsvSink {
         .map(c => Fragment.const(hygenicIdent(c.name)) ++ pgColumnType(c.tpe))
         .intercalate(fr",")
 
-    (preamble ++ Fragments.parentheses(colSpecs)).update.run
+    (preamble ++ Fragments.parentheses(colSpecs))
+      .updateWithLogHandler(logHandler)
+      .run
   }
 
   private def dropTableIfExists(table: Table): ConnectionIO[Int] =
-    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygenicIdent(table))).update.run
+    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygenicIdent(table)))
+      .updateWithLogHandler(logHandler)
+      .run
 
   private val pgColumnType: ColumnType.Scalar => Fragment = {
     case ColumnType.Null => fr0"smallint"

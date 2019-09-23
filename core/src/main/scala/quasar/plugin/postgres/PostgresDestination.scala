@@ -16,7 +16,7 @@
 
 package quasar.plugin.postgres
 
-import cats.effect.Effect
+import cats.effect.{Effect, Timer}
 
 import doobie.Transactor
 
@@ -25,7 +25,7 @@ import quasar.connector.MonadResourceErr
 
 import scalaz.NonEmptyList
 
-final class PostgresDestination[F[_]: Effect: MonadResourceErr](
+final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     xa: Transactor[F],
     writeMode: WriteMode)
     extends Destination[F] {
