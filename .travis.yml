@@ -33,22 +33,15 @@ env:
     - POSTGRES_MAJOR=10
     - POSTGRES_MAJOR=11
 
-matrix:
-  include:
-    - env: POSTGRES_MAJOR=9
-    - env: POSTGRES_MAJOR=10
-    - env: POSTGRES_MAJOR=11
+script:
+  - set -e
+  - docker-compose up -d postgres${POSTGRES_MAJOR}
+  - $SBT ++$TRAVIS_SCALA_VERSION test
 
 jobs:
   include:
-    - stage: test
-      before_script: docker-compose up -d postgres${POSTGRES_MAJOR}
-      script:
-        - set -e
-        - $SBT ++$TRAVIS_SCALA_VERSION test
-
     - stage: publish
-      env:
+      env: POSTGRES_MAJOR=9
       script:
         - set -e
         - $SBT transferPublishAndTagResources
