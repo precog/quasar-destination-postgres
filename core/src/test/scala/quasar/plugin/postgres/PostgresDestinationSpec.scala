@@ -358,10 +358,10 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           case Some((r, rs)) =>
             val colList =
               r.keys.toList
-                .map(k => Fragment.const(hygenicIdent(k)))
+                .map(k => Fragment.const(hygienicIdent(k)))
                 .intercalate(fr",")
 
-            val q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygenicIdent(table))
+            val q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
 
             val run = for {
               _ <- toCsvSink(dst, sink, renderRow, rs).compile.drain

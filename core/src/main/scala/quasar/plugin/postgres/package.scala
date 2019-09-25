@@ -71,7 +71,7 @@ package object postgres {
   }
 
   /** Returns a quoted and escaped version of `ident`. */
-  def hygenicIdent(ident: Ident): Ident =
+  def hygienicIdent(ident: Ident): Ident =
     s""""${ident.replace("\"", "\"\"")}""""
 
   /** Returns the JDBC connection string corresponding to the given postgres URI. */

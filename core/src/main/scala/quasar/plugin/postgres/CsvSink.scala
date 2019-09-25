@@ -154,11 +154,11 @@ object CsvSink extends Logging {
   private def copyToTable(table: Table, columns: NonEmptyList[TableColumn]): Pipe[CopyManagerIO, Chunk[Byte], Unit] = {
     val cols =
       columns
-        .map(c => hygenicIdent(c.name))
+        .map(c => hygienicIdent(c.name))
         .intercalate(", ")
 
     val copyQuery =
-      s"COPY ${hygenicIdent(table)} ($cols) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
+      s"COPY ${hygienicIdent(table)} ($cols) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
 
     val logStart = debug[CopyManagerIO](s"BEGIN COPY: `${copyQuery}`")
 
@@ -179,11 +179,11 @@ object CsvSink extends Logging {
 
   private def createTable(table: Table, columns: NonEmptyList[TableColumn]): ConnectionIO[Int] = {
     val preamble =
-      fr"CREATE TABLE" ++ Fragment.const(hygenicIdent(table))
+      fr"CREATE TABLE" ++ Fragment.const(hygienicIdent(table))
 
     val colSpecs =
       columns
-        .map(c => Fragment.const(hygenicIdent(c.name)) ++ pgColumnType(c.tpe))
+        .map(c => Fragment.const(hygienicIdent(c.name)) ++ pgColumnType(c.tpe))
         .intercalate(fr",")
 
     (preamble ++ Fragments.parentheses(colSpecs))
@@ -192,7 +192,7 @@ object CsvSink extends Logging {
   }
 
   private def dropTableIfExists(table: Table): ConnectionIO[Int] =
-    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygenicIdent(table)))
+    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
       .updateWithLogHandler(logHandler)
       .run
 
