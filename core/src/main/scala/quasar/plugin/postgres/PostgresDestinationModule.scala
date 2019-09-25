@@ -32,6 +32,8 @@ import eu.timepit.refined.auto._
 
 import java.util.concurrent.Executors
 
+import org.slf4s.Logging
+
 import quasar.api.destination.{DestinationError => DE, _}
 import quasar.concurrent.{BlockingContext, NamedDaemonThreadFactory}
 import quasar.connector.{DestinationModule, MonadResourceErr}
@@ -42,7 +44,7 @@ import scala.util.control.NonFatal
 
 import scalaz.syntax.tag._
 
-object PostgresDestinationModule extends DestinationModule {
+object PostgresDestinationModule extends DestinationModule with Logging {
 
   type InitErr = DE.InitializationError[Json]
 
@@ -93,6 +95,9 @@ object PostgresDestinationModule extends DestinationModule {
         case NonFatal(ex: Exception) =>
           Left(DE.connectionFailed[Json, InitErr](destinationType, config, ex))
       }))
+
+      _ <- EitherT.right[InitErr](Resource.liftF(Sync[F].delay(
+        log.info(s"Initialized postgres destination: tag = $suffix, config = ${cfg.sanitized.asJson}"))))
 
     } yield new PostgresDestination(xa, WriteMode.Replace): Destination[F]
 
