@@ -110,6 +110,22 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
+    "reject OffsetDate columns" >>* {
+      val MinOffsetDate = OffsetDate(LocalDate.MIN, ZoneOffset.MIN)
+      val MaxOffsetDate = OffsetDate(LocalDate.MAX, ZoneOffset.MAX)
+
+      freshTableName flatMap { table =>
+        val cfg = config(url = TestConnectionUrl)
+        val rs = Stream(("min" ->> MinOffsetDate) :: ("max" ->> MaxOffsetDate) :: HNil)
+
+        csv(cfg)(drainAndSelectAs[IO, String :: String :: HNil](TestConnectionUrl, table, _, rs))
+          .attempt
+          .map(_ must beLeft.like {
+            case ColumnTypesNotSupported(ts) => ts.toList must contain(ColumnType.OffsetDate: ColumnType)
+          })
+      }
+    }
+
     "quote table names to prevent injection" >>* {
       csv(config()) { sink =>
         val recs = List(("x" ->> 2.3) :: ("y" ->> 8.1) :: HNil)
@@ -220,19 +236,6 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       ("min" ->> LocalDate.of(1, 1, 1)) ::
       ("max" ->> B.MaxLocalDate) ::
       HNil)
-
-    "represent OffsetDate as String" >>* {
-      val MinOffsetDate = OffsetDate(LocalDate.MIN, ZoneOffset.MIN)
-      val MaxOffsetDate = OffsetDate(LocalDate.MAX, ZoneOffset.MAX)
-
-      freshTableName flatMap { table =>
-        val cfg = config(url = TestConnectionUrl)
-        val rs = Stream(("min" ->> MinOffsetDate) :: ("max" ->> MaxOffsetDate) :: HNil)
-
-        csv(cfg)(drainAndSelectAs[IO, String :: String :: HNil](TestConnectionUrl, table, _, rs))
-          .map(_ must_=== List(MinOffsetDate.toString :: MaxOffsetDate.toString :: HNil))
-      }
-    }
 
     "roundtrip LocalDateTime" >>* mustRoundtrip(
       ("min" ->> B.MinLocalDateTime) ::

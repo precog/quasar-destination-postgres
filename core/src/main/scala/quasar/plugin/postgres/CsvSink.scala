@@ -100,13 +100,17 @@ object CsvSink extends Logging {
           .compile
           .drain
 
+      colSpecs <- cols.traverse(columnSpec).fold(
+        invalid => AE.raiseError(new ColumnTypesNotSupported(invalid)),
+        _.pure[F])
+
       ensureTable =
         writeMode match {
           case WriteMode.Create =>
-            createTable(tbl, cols)
+            createTable(tbl, colSpecs)
 
           case WriteMode.Replace =>
-            dropTableIfExists(tbl) >> createTable(tbl, cols)
+            dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
         }
 
       _ <- (ensureTable >> PHC.pgGetCopyAPI(doCopy)).transact(xa) handleErrorWith { t =>
@@ -177,16 +181,11 @@ object CsvSink extends Logging {
     }
   }
 
-  private def createTable(table: Table, columns: NonEmptyList[TableColumn]): ConnectionIO[Int] = {
+  private def createTable(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
     val preamble =
       fr"CREATE TABLE" ++ Fragment.const(hygienicIdent(table))
 
-    val colSpecs =
-      columns
-        .map(c => Fragment.const(hygienicIdent(c.name)) ++ pgColumnType(c.tpe))
-        .intercalate(fr",")
-
-    (preamble ++ Fragments.parentheses(colSpecs))
+    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
       .updateWithLogHandler(logHandler)
       .run
   }
@@ -196,18 +195,20 @@ object CsvSink extends Logging {
       .updateWithLogHandler(logHandler)
       .run
 
-  private val pgColumnType: ColumnType.Scalar => Fragment = {
-    case ColumnType.Null => fr0"smallint"
-    case ColumnType.Boolean => fr0"boolean"
-    case ColumnType.LocalTime => fr0"time"
-    case ColumnType.OffsetTime => fr0"time with timezone"
-    case ColumnType.LocalDate => fr0"date"
-    // TODO: Can this be improved?
-    case ColumnType.OffsetDate => fr0"text"
-    case ColumnType.LocalDateTime => fr0"timestamp"
-    case ColumnType.OffsetDateTime => fr0"timestamp with time zone"
-    case ColumnType.Interval => fr0"interval"
-    case ColumnType.Number => fr0"numeric"
-    case ColumnType.String => fr0"text"
+  private def columnSpec(tc: TableColumn): ValidatedNel[ColumnType.Scalar, Fragment] =
+    pgColumnType(tc.tpe).map(Fragment.const(hygienicIdent(tc.name)) ++ _)
+
+  private val pgColumnType: ColumnType.Scalar => ValidatedNel[ColumnType.Scalar, Fragment] = {
+    case ColumnType.Null => fr0"smallint".validNel
+    case ColumnType.Boolean => fr0"boolean".validNel
+    case ColumnType.LocalTime => fr0"time".validNel
+    case ColumnType.OffsetTime => fr0"time with timezone".validNel
+    case ColumnType.LocalDate => fr0"date".validNel
+    case t @ ColumnType.OffsetDate => t.invalidNel
+    case ColumnType.LocalDateTime => fr0"timestamp".validNel
+    case ColumnType.OffsetDateTime => fr0"timestamp with time zone".validNel
+    case ColumnType.Interval => fr0"interval".validNel
+    case ColumnType.Number => fr0"numeric".validNel
+    case ColumnType.String => fr0"text".validNel
   }
 }
