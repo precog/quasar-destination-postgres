@@ -36,8 +36,10 @@ lazy val core = project
       "org.slf4s"    %% "slf4s-api"       % "1.7.25",
       "org.tpolecat" %% "doobie-core"     % DoobieVersion,
       "org.tpolecat" %% "doobie-hikari"   % DoobieVersion,
-      "org.tpolecat" %% "doobie-postgres" % DoobieVersion,
+      "org.tpolecat" %% "doobie-postgres" % DoobieVersion
+    ),
 
+    libraryDependencies ++= Seq(
       "com.github.tototoshi" %% "scala-csv" % "1.3.6" % Test,
       "com.slamdata" %% "qdata-core" % "10.0.31" % Test,
       "com.slamdata" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
