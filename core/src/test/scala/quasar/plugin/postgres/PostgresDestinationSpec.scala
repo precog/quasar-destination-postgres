@@ -91,7 +91,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     "reject empty paths with NotAResource" >>* {
       csv(config()) { sink =>
         val p = ResourcePath.root()
-        val r = sink.run(p, List(TableColumn("a", ColumnType.Boolean)), Stream.empty)
+        val r = sink.run(p, List(TableColumn("a", ColumnType.Boolean)), Stream.empty).compile.drain
 
         MRE.attempt(r).map(_ must beLike {
           case -\/(ResourceError.NotAResource(p2)) => p2 must_=== p
@@ -102,7 +102,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     "reject paths with > 1 segments with NotAResource" >>* {
       csv(config()) { sink =>
         val p = ResourcePath.root() / ResourceName("foo") / ResourceName("bar")
-        val r = sink.run(p, List(TableColumn("a", ColumnType.Boolean)), Stream.empty)
+        val r = sink.run(p, List(TableColumn("a", ColumnType.Boolean)), Stream.empty).compile.drain
 
         MRE.attempt(r).map(_ must beLike {
           case -\/(ResourceError.NotAResource(p2)) => p2 must_=== p
