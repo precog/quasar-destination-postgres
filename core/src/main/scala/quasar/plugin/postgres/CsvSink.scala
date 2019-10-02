@@ -120,12 +120,14 @@ object CsvSink extends Logging {
             AE.raiseError(t))
       }
 
-      endAt <- timer.clock.monotonic(MILLISECONDS)
-      tbytes <- totalBytes.get
+      logEnd = for {
+        endAt <- timer.clock.monotonic(MILLISECONDS)
+        tbytes <- totalBytes.get
+        _ <- debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
+      } yield ()
 
-      _ <- debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
 
-    } yield copy)
+    } yield copy ++ Stream.eval(logEnd))
   }
 
   ////
