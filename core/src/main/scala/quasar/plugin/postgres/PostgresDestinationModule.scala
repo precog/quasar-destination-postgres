@@ -70,14 +70,17 @@ object PostgresDestinationModule extends DestinationModule with Logging {
         (err, c) =>
           Left(DE.malformedConfiguration[Json, InitErr](
             destinationType,
-            config,
+            jString(Redacted),
             err)),
 
         Right(_))
 
     val validateConnection: ConnectionIO[Either[InitErr, Unit]] =
       FC.isValid(ValidationTimeout.toSeconds.toInt) map { v =>
-        if (!v) Left(connectionInvalid(config)) else Right(())
+        if (!v)
+          Left(connectionInvalid(sanitizeDestinationConfig(config)))
+        else
+          Right(())
       }
 
     val init = for {
@@ -93,7 +96,7 @@ object PostgresDestinationModule extends DestinationModule with Logging {
 
       _ <- EitherT(Resource.liftF(validateConnection.transact(xa) recover {
         case NonFatal(ex: Exception) =>
-          Left(DE.connectionFailed[Json, InitErr](destinationType, config, ex))
+          Left(DE.connectionFailed[Json, InitErr](destinationType, sanitizeDestinationConfig(config), ex))
       }))
 
       _ <- EitherT.right[InitErr](Resource.liftF(Sync[F].delay(

@@ -69,7 +69,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
       dest(cfg)(r => IO.pure(r match {
         case Left(DestinationError.MalformedConfiguration(_, c, _)) =>
-          c must_=== cfg
+          c must_=== jString(Redacted)
 
         case _ => ko("Expected a malformed configuration")
       }))
