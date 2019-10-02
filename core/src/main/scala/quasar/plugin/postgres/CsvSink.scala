@@ -75,21 +75,21 @@ object CsvSink extends Logging {
           AE.raiseError(new IllegalArgumentException("No columns specified."))
       }
 
-    for {
-      tbl <- Stream.eval(table)
+    Stream.force(for {
+      tbl <- table
 
-      cols <- Stream.eval(tableColumns)
+      cols <- tableColumns
 
       action = writeMode match {
         case WriteMode.Create => "Creating"
         case WriteMode.Replace => "Replacing"
       }
 
-      _ <- Stream.eval(debug[F](s"${action} '${tbl}' with schema ${cols.show}"))
+      _ <- debug[F](s"${action} '${tbl}' with schema ${cols.show}")
 
       // Telemetry
-      totalBytes <- Stream.eval(Ref[F].of(0L))
-      startAt <- Stream.eval(timer.clock.monotonic(MILLISECONDS))
+      totalBytes <- Ref[F].of(0L)
+      startAt <- timer.clock.monotonic(MILLISECONDS)
 
       doCopy =
         data
@@ -99,10 +99,9 @@ object CsvSink extends Logging {
           .translate(Effect.toIOK[F] andThen LiftIO.liftK[CopyManagerIO])
           .through(copyToTable(tbl, cols))
 
-      colSpecs <- Stream.eval(
-        cols.traverse(columnSpec).fold(
-          invalid => AE.raiseError(new ColumnTypesNotSupported(invalid)),
-          _.pure[F]))
+      colSpecs <- cols.traverse(columnSpec).fold(
+        invalid => AE.raiseError(new ColumnTypesNotSupported(invalid)),
+        _.pure[F])
 
       ensureTable =
         writeMode match {
@@ -113,19 +112,20 @@ object CsvSink extends Logging {
             dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
         }
 
-      doCopy0 =
-        Stream.eval(ensureTable) >> doCopy.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_)))
+      copy0 = Stream.eval(ensureTable).drain ++ doCopy.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_)))
 
-      _ <- doCopy0.translate(λ[FunctionK[ConnectionIO, F]](_.transact(xa))) handleErrorWith { t =>
-        Stream.eval(error[F](s"COPY to '${tbl}' produced unexpected error: ${t.getMessage}", t) >> AE.raiseError(t))
+      copy = copy0.transact(xa) handleErrorWith { t =>
+        Stream.eval(
+          error[F](s"COPY to '${tbl}' produced unexpected error: ${t.getMessage}", t) >>
+            AE.raiseError(t))
       }
 
-      endAt <- Stream.eval(timer.clock.monotonic(MILLISECONDS))
-      tbytes <- Stream.eval(totalBytes.get)
+      endAt <- timer.clock.monotonic(MILLISECONDS)
+      tbytes <- totalBytes.get
 
-      _ <- Stream.eval(debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms"))
+      _ <- debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
 
-    } yield ()
+    } yield copy)
   }
 
   ////
