@@ -43,9 +43,9 @@ final case class Config(connectionUri: URI, schema: Option[String]) {
       Option(connectionUri.getQuery) map { q =>
         val pairs = q.split('&').toList map { kv =>
           if (kv.toLowerCase.startsWith("password"))
-            "password=<redacted>"
+            s"password=$Redacted"
           else if (kv.toLowerCase.startsWith("sslpassword"))
-            "sslpassword=<redacted>"
+            s"sslpassword=$Redacted"
           else
             kv
         }

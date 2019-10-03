@@ -34,6 +34,8 @@ package object postgres {
   type Ident = String
   type Table = Ident
 
+  val Redacted: String = "--REDACTED--"
+
   val PostgresCsvConfig: RenderConfig.Csv = {
     val eraPattern = " G"
 
