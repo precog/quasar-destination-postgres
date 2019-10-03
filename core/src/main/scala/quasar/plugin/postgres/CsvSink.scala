@@ -112,7 +112,9 @@ object CsvSink extends Logging {
             dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
         }
 
-      copy0 = Stream.eval(ensureTable).drain ++ doCopy.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_)))
+      copy0 =
+        Stream.eval(ensureTable).void ++
+          doCopy.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_)))
 
       copy = copy0.transact(xa) handleErrorWith { t =>
         Stream.eval(
