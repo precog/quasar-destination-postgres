@@ -75,8 +75,9 @@ trait CsvSupport {
         val rkeys = r.keys.toList
         val rtypes = r.values.map(asColumnType).toList
         val columns = rkeys.zip(rtypes).map((TableColumn(_, _)).tupled)
+        val encoded = rs.through(encodeCsvRecords[F, renderRow.type, R, V, S](renderRow))
 
-        Pull.eval(sink.run(dst, columns, rs.through(encodeCsvRecords[F, renderRow.type, R, V, S](renderRow))))
+        sink.run(dst, columns, encoded).pull.echo
 
       case None => Pull.done
     }
