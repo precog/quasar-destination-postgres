@@ -19,6 +19,7 @@ package quasar.plugin.postgres
 import slamdata.Predef.{Stream => _, _}
 
 import cats._
+import cats.arrow.FunctionK
 import cats.data._
 import cats.effect.{Effect, ExitCase, LiftIO, Sync, Timer}
 import cats.effect.concurrent.Ref
@@ -52,7 +53,7 @@ object CsvSink extends Logging {
       columns: List[TableColumn],
       data: Stream[F, Byte])(
       implicit timer: Timer[F])
-      : F[Unit] = {
+      : Stream[F, Unit] = {
 
     val AE = ApplicativeError[F, Throwable]
 
@@ -74,7 +75,7 @@ object CsvSink extends Logging {
           AE.raiseError(new IllegalArgumentException("No columns specified."))
       }
 
-    for {
+    Stream.force(for {
       tbl <- table
 
       cols <- tableColumns
@@ -97,8 +98,6 @@ object CsvSink extends Logging {
           // TODO: Is there a better way?
           .translate(Effect.toIOK[F] andThen LiftIO.liftK[CopyManagerIO])
           .through(copyToTable(tbl, cols))
-          .compile
-          .drain
 
       colSpecs <- cols.traverse(columnSpec).fold(
         invalid => AE.raiseError(new ColumnTypesNotSupported(invalid)),
@@ -113,17 +112,24 @@ object CsvSink extends Logging {
             dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
         }
 
-      _ <- (ensureTable >> PHC.pgGetCopyAPI(doCopy)).transact(xa) handleErrorWith { t =>
-        error[F](s"COPY to '${tbl}' produced unexpected error: ${t.getMessage}", t) >>
-          AE.raiseError(t)
+      copy0 =
+        Stream.eval(ensureTable).void ++
+          doCopy.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_)))
+
+      copy = copy0.transact(xa) handleErrorWith { t =>
+        Stream.eval(
+          error[F](s"COPY to '${tbl}' produced unexpected error: ${t.getMessage}", t) >>
+            AE.raiseError(t))
       }
 
-      endAt <- timer.clock.monotonic(MILLISECONDS)
-      tbytes <- totalBytes.get
+      logEnd = for {
+        endAt <- timer.clock.monotonic(MILLISECONDS)
+        tbytes <- totalBytes.get
+        _ <- debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
+      } yield ()
 
-      _ <- debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
 
-    } yield ()
+    } yield copy ++ Stream.eval(logEnd))
   }
 
   ////
