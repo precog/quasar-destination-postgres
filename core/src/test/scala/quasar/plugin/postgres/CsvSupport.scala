@@ -19,6 +19,7 @@ package quasar.plugin.postgres
 import slamdata.Predef.{Stream => _, _}
 
 import cats.ApplicativeError
+import cats.data.NonEmptyList
 
 import com.github.tototoshi.csv._
 
@@ -31,7 +32,7 @@ import qdata.time._
 import quasar.api.destination._
 import quasar.api.push.RenderConfig
 import quasar.api.resource.ResourcePath
-import quasar.api.table.{ColumnType, TableColumn}
+import quasar.api.table.ColumnType
 
 import scala.Float
 import scala.collection.immutable.Seq
@@ -57,7 +58,7 @@ trait CsvSupport {
   // TODO: handle includeHeader == true
   def toCsvSink[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       dst: ResourcePath,
-      sink: ResultSink.Csv[F],
+      sink: ResultSink.Csv[F, ColumnType.Scalar],
       renderRow: P,
       records: Stream[F, R])(
       implicit
@@ -74,10 +75,10 @@ trait CsvSupport {
       case Some((r, rs)) =>
         val rkeys = r.keys.toList
         val rtypes = r.values.map(asColumnType).toList
-        val columns = rkeys.zip(rtypes).map((TableColumn(_, _)).tupled)
+        val columns = rkeys.zip(rtypes).map((DestinationColumn[ColumnType.Scalar] _).tupled)
         val encoded = rs.through(encodeCsvRecords[F, renderRow.type, R, V, S](renderRow))
 
-        sink.run(dst, columns, encoded).pull.echo
+        sink.run(dst, NonEmptyList.fromListUnsafe(columns), encoded).pull.echo
 
       case None => Pull.done
     }

@@ -20,6 +20,7 @@ import slamdata.Predef.{Stream => _, _}
 
 import argonaut._, Argonaut._, ArgonautScalaz._
 
+import cats.data.NonEmptyList
 import cats.effect._
 import cats.implicits._
 
@@ -40,7 +41,7 @@ import quasar.EffectfulQSpec
 import quasar.connector._
 import quasar.api.destination._
 import quasar.api.resource._
-import quasar.api.table.{ColumnType, TableColumn}
+import quasar.api.table.ColumnType
 import quasar.contrib.scalaz.MonadError_
 
 import scala.Float
@@ -91,7 +92,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     "reject empty paths with NotAResource" >>* {
       csv(config()) { sink =>
         val p = ResourcePath.root()
-        val r = sink.run(p, List(TableColumn("a", ColumnType.Boolean)), Stream.empty).compile.drain
+        val r = sink.run(p, NonEmptyList.one(DestinationColumn("a", ColumnType.Boolean)), Stream.empty).compile.drain
 
         MRE.attempt(r).map(_ must beLike {
           case -\/(ResourceError.NotAResource(p2)) => p2 must_=== p
@@ -102,7 +103,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     "reject paths with > 1 segments with NotAResource" >>* {
       csv(config()) { sink =>
         val p = ResourcePath.root() / ResourceName("foo") / ResourceName("bar")
-        val r = sink.run(p, List(TableColumn("a", ColumnType.Boolean)), Stream.empty).compile.drain
+        val r = sink.run(p, NonEmptyList.one(DestinationColumn("a", ColumnType.Boolean)), Stream.empty).compile.drain
 
         MRE.attempt(r).map(_ must beLike {
           case -\/(ResourceError.NotAResource(p2)) => p2 must_=== p
@@ -300,15 +301,15 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     ("schema" := schema) ->:
     jEmptyObject
 
-  def csv[A](cfg: Json)(f: ResultSink.Csv[IO] => IO[A]): IO[A] =
+  def csv[A](cfg: Json)(f: ResultSink.Csv[IO, ColumnType.Scalar] => IO[A]): IO[A] =
     dest(cfg) {
       case Left(err) =>
         IO.raiseError(new RuntimeException(err.shows))
 
       case Right(dst) =>
-        dst.sinks.list
+        dst.sinks.toList
           .collectFirst({ case c @ ResultSink.Csv(_, _) => c })
-          .map(f)
+          .map(s => f(s.asInstanceOf[ResultSink.Csv[IO, ColumnType.Scalar]]))
           .getOrElse(IO.raiseError(new RuntimeException("No CSV sink found!")))
     }
 
@@ -318,7 +319,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   def drainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       connectionUri: String,
       table: Table,
-      sink: ResultSink.Csv[F],
+      sink: ResultSink.Csv[F, ColumnType.Scalar],
       records: Stream[F, R])(
       implicit
       keys: Keys.Aux[R, K],
@@ -340,7 +341,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
           connectionUri: String,
           table: Table,
-          sink: ResultSink.Csv[F],
+          sink: ResultSink.Csv[F, ColumnType.Scalar],
           records: Stream[F, R])(
           implicit
           async: Async[F],
