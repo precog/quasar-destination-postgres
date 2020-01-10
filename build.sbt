@@ -10,7 +10,7 @@ scmInfo in ThisBuild := Some(ScmInfo(
   url("https://github.com/slamdata/quasar-destination-postgres"),
   "scm:git@github.com:slamdata/quasar-destination-postgres.git"))
 
-val DoobieVersion = "0.7.0"
+val DoobieVersion = "0.8.8"
 
 lazy val root = project
   .in(file("."))
@@ -41,7 +41,7 @@ lazy val core = project
 
     libraryDependencies ++= Seq(
       "com.github.tototoshi" %% "scala-csv" % "1.3.6" % Test,
-      "com.slamdata" %% "qdata-core" % "10.1.10" % Test,
+      "com.slamdata" %% "qdata-core" % "10.0.35" % Test,
       "com.slamdata" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
       "io.argonaut" %% "argonaut-scalaz" % "6.2.3" % Test
     ))
