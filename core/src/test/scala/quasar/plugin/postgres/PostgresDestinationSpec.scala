@@ -25,6 +25,7 @@ import cats.implicits._
 
 import doobie._
 import doobie.implicits._
+import doobie.implicits.legacy.localdate._
 import doobie.util.Read
 
 import fs2.{Pull, Stream}

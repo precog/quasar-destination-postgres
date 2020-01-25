@@ -20,13 +20,13 @@ import slamdata.Predef._
 
 import doobie.enum.JdbcType
 import doobie.postgres.implicits._
-import doobie.util.Meta
+import doobie.util.meta.Meta
 
 import java.time._
 
 import org.postgresql.util.PGInterval
 
-import qdata.time._
+import qdata.{time => qt}
 
 import scala.Predef.classOf
 
@@ -56,16 +56,16 @@ trait PGTemporalMeta {
       _.setObject(_, _),
       _.updateObject(_, _))
 
-  implicit val dateTimeIntervalMeta: Meta[DateTimeInterval] = {
-    def from(pg: PGInterval): DateTimeInterval = {
+  implicit val dateTimeIntervalMeta: Meta[qt.DateTimeInterval] = {
+    def from(pg: PGInterval): qt.DateTimeInterval = {
       val s = pg.getSeconds
       val ns = ((s - s.toLong) * 1000000000).toLong
       val ss = (pg.getHours.toLong * 3600L) + (pg.getMinutes.toLong * 60L) + s.toLong
 
-      DateTimeInterval.make(pg.getYears, pg.getMonths, pg.getDays, ss, ns)
+      qt.DateTimeInterval.make(pg.getYears, pg.getMonths, pg.getDays, ss, ns)
     }
 
-    def to(i: DateTimeInterval): PGInterval = {
+    def to(i: qt.DateTimeInterval): PGInterval = {
       val d = i.duration
       val p = i.period
 

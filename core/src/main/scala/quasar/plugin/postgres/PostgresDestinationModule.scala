@@ -35,14 +35,12 @@ import java.util.concurrent.Executors
 import org.slf4s.Logging
 
 import quasar.api.destination.{DestinationError => DE, _}
-import quasar.concurrent.{BlockingContext, NamedDaemonThreadFactory}
+import quasar.{concurrent => qc}
 import quasar.connector.{DestinationModule, MonadResourceErr}
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
 import scala.util.control.NonFatal
-
-import scalaz.syntax.tag._
 
 object PostgresDestinationModule extends DestinationModule with Logging {
 
@@ -115,7 +113,7 @@ object PostgresDestinationModule extends DestinationModule with Logging {
       : Resource[F, ExecutionContext] = {
 
     val alloc =
-      F.delay(Executors.newFixedThreadPool(size, NamedDaemonThreadFactory(name)))
+      F.delay(Executors.newFixedThreadPool(size, qc.NamedDaemonThreadFactory(name)))
 
     Resource.make(alloc)(es => F.delay(es.shutdown()))
       .map(ExecutionContext.fromExecutor)
@@ -128,10 +126,10 @@ object PostgresDestinationModule extends DestinationModule with Logging {
   private def hikariTransactor[F[_]: Async: ContextShift](
       cfg: Config,
       connectPool: ExecutionContext,
-      xaPool: BlockingContext)
+      xaBlocker: Blocker)
       : Resource[F, HikariTransactor[F]] = {
 
-    HikariTransactor.initial[F](connectPool, xaPool.unwrap) evalMap { xa =>
+    HikariTransactor.initial[F](connectPool, xaBlocker) evalMap { xa =>
       xa.configure { ds =>
         Sync[F] delay {
           ds.setJdbcUrl(jdbcUri(cfg.connectionUri))
@@ -145,12 +143,12 @@ object PostgresDestinationModule extends DestinationModule with Logging {
   }
 
   private def transactPool[F[_]](name: String)(implicit F: Sync[F])
-      : Resource[F, BlockingContext] = {
+      : Resource[F, Blocker] = {
 
     val alloc =
-      F.delay(Executors.newCachedThreadPool(NamedDaemonThreadFactory(name)))
+      F.delay(Executors.newCachedThreadPool(qc.NamedDaemonThreadFactory(name)))
 
     Resource.make(alloc)(es => F.delay(es.shutdown()))
-      .map(es => BlockingContext(ExecutionContext.fromExecutor(es)))
+      .map(es => qc.Blocker(ExecutionContext.fromExecutor(es)))
   }
 }
