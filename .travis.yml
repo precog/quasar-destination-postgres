@@ -51,6 +51,9 @@ jobs:
         - set -e
         - $SBT transferPublishAndTagResources
         - TRAVIS_JOB_NUMBER=1 scripts/publishAndTag 'slamdata/quasar-destination-postgres'
+        - bumpInDownstream() { echo $1 > slamdata-destination-postgres-version; }
+        - export -f bumpInDownstream
+        - scripts/bumpDependentProject slamdata slamx bumpInDownstream
 
       git:
         depth: false
@@ -68,5 +71,5 @@ branches:
     - /^backport.*$/
 
 before_cache:
-  - find "$HOME/.sbt/" -name '*.lock' -print0 | xargs -0 rm
-  - find "$HOME/.ivy2/" -name 'ivydata-*.properties' -print0 | xargs -0 rm
+  - find "$HOME/.sbt/" -name '*.lock' -delete
+  - find "$HOME/.ivy2/" -name 'ivydata-*.properties' -delete
