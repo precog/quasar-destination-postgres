@@ -53,7 +53,7 @@ lazy val core = project
 
     libraryDependencies ++= Seq(
       "com.github.tototoshi" %% "scala-csv" % "1.3.6" % Test,
-      "com.slamdata" %% "qdata-core" % "11.0.6" % Test,
+      "com.slamdata" %% "qdata-core" % "13.0.0" % Test,
       "com.slamdata" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
       "io.argonaut" %% "argonaut-scalaz" % "6.2.3" % Test
     ))
