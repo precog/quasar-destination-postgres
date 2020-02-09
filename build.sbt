@@ -55,6 +55,6 @@ lazy val core = project
       "com.github.tototoshi" %% "scala-csv" % "1.3.6" % Test,
       "com.slamdata" %% "qdata-core" % "14.0.1" % Test,
       "com.slamdata" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
-      "io.argonaut" %% "argonaut-scalaz" % "6.2.3" % Test
+      "io.argonaut" %% "argonaut-scalaz" % "6.2.4" % Test
     ))
   .enablePlugins(AutomateHeaderPlugin, QuasarPlugin)
