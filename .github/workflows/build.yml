@@ -10,6 +10,7 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         scala: [2.12.10]
+        postgres: [9, 10, 11]
     steps:
       - name: Checkout branch
         uses: actions/checkout@v2
@@ -19,6 +20,8 @@ jobs:
           java-version: 1.8
       - name: Setup Git Actor
         run: git config github.actor slamdata-bot
+      - name: Start postgres ${matrix.postgres}} docker 
+        run: docker-compose up -d postgres${{ matrix.postgres }}
       - name: Compile and test
         run: ./sbt ++${{ matrix.scala }} test
       - name: Upload target
