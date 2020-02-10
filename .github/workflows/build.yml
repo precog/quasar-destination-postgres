@@ -1,4 +1,4 @@
-name: destthroughspotbuild
+name: despostgrestbuild
 
 on: pull_request
 
