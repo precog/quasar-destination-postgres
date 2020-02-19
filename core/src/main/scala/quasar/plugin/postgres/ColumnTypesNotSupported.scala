@@ -20,7 +20,7 @@ import slamdata.Predef._
 
 import cats.data.NonEmptyList
 
-import quasar.api.table.ColumnType
+import quasar.api.ColumnType
 
 final case class ColumnTypesNotSupported(types: NonEmptyList[ColumnType.Scalar]) extends RuntimeException(
     s"The postgres destination does not support the following column types: ${types.toList.distinct.mkString(", ")}")
