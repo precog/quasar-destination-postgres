@@ -36,7 +36,8 @@ import org.slf4s.Logging
 
 import quasar.api.destination.{DestinationError => DE, _}
 import quasar.{concurrent => qc}
-import quasar.connector.{DestinationModule, MonadResourceErr}
+import quasar.connector.MonadResourceErr
+import quasar.connector.destination.{Destination, DestinationModule}
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._

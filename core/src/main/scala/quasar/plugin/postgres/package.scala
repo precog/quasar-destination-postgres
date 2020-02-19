@@ -24,8 +24,8 @@ import java.net.URI
 import java.time.format.{DateTimeFormatter, DateTimeFormatterBuilder, SignStyle}
 import java.time.temporal.ChronoField
 
-import quasar.api.push.RenderConfig
 import quasar.api.resource._
+import quasar.connector.render.RenderConfig
 
 import scala.util.Random
 

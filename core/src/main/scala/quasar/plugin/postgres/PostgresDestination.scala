@@ -23,6 +23,7 @@ import doobie.Transactor
 
 import quasar.api.destination._
 import quasar.connector.MonadResourceErr
+import quasar.connector.destination._
 
 final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     xa: Transactor[F],
@@ -33,5 +34,5 @@ final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     PostgresDestinationModule.destinationType
 
   val sinks: NonEmptyList[ResultSink[F, Type]] =
-    NonEmptyList.one(ResultSink.csv(PostgresCsvConfig)(CsvSink(xa, writeMode)))
+    NonEmptyList.one(ResultSink.create(PostgresCsvConfig)(CsvSink(xa, writeMode)))
 }

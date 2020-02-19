@@ -35,10 +35,9 @@ import fs2.{Chunk, Pipe, Stream}
 
 import org.slf4s.Logging
 
-import quasar.connector._
-import quasar.api.destination.DestinationColumn
+import quasar.api.{Column, ColumnType}
 import quasar.api.resource._
-import quasar.api.table.ColumnType
+import quasar.connector._
 
 import scala.concurrent.duration.MILLISECONDS
 
@@ -47,7 +46,7 @@ object CsvSink extends Logging {
       xa: Transactor[F],
       writeMode: WriteMode)(
       dst: ResourcePath,
-      columns: NonEmptyList[DestinationColumn[ColumnType.Scalar]],
+      columns: NonEmptyList[Column[ColumnType.Scalar]],
       data: Stream[F, Byte])(
       implicit timer: Timer[F])
       : Stream[F, Unit] = {
@@ -149,7 +148,7 @@ object CsvSink extends Logging {
 
   private def copyToTable(
       table: Table,
-      columns: NonEmptyList[DestinationColumn[ColumnType.Scalar]])
+      columns: NonEmptyList[Column[ColumnType.Scalar]])
       : Pipe[CopyManagerIO, Chunk[Byte], Unit] = {
     val cols =
       columns
@@ -190,7 +189,7 @@ object CsvSink extends Logging {
       .updateWithLogHandler(logHandler)
       .run
 
-  private def columnSpec(c: DestinationColumn[ColumnType.Scalar]): ValidatedNel[ColumnType.Scalar, Fragment] =
+  private def columnSpec(c: Column[ColumnType.Scalar]): ValidatedNel[ColumnType.Scalar, Fragment] =
     pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
 
   private val pgColumnType: ColumnType.Scalar => ValidatedNel[ColumnType.Scalar, Fragment] = {
