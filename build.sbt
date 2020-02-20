@@ -1,5 +1,7 @@
 import scala.collection.Seq
 
+ThisBuild / scalaVersion := "2.12.10"
+
 performMavenCentralSync in ThisBuild := false   // basically just ignores all the sonatype sync parts of things
 
 publishAsOSSProject in ThisBuild := true
