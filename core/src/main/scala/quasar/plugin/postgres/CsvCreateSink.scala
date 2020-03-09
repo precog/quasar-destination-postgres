@@ -41,7 +41,7 @@ import quasar.connector._
 
 import scala.concurrent.duration.MILLISECONDS
 
-object CsvSink extends Logging {
+object CsvCreateSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
       xa: Transactor[F])(
       dst: ResourcePath,
