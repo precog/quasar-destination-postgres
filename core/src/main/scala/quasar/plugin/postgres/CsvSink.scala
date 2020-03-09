@@ -43,8 +43,7 @@ import scala.concurrent.duration.MILLISECONDS
 
 object CsvSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
-      xa: Transactor[F],
-      writeMode: WriteMode)(
+      xa: Transactor[F])(
       dst: ResourcePath,
       columns: NonEmptyList[Column[ColumnType.Scalar]],
       data: Stream[F, Byte])(
@@ -65,12 +64,7 @@ object CsvSink extends Logging {
     Stream.force(for {
       tbl <- table
 
-      action = writeMode match {
-        case WriteMode.Create => "Creating"
-        case WriteMode.Replace => "Replacing"
-      }
-
-      _ <- debug[F](s"${action} '${tbl}' with schema ${columns.show}")
+      _ <- debug[F](s"Replacing '${tbl}' with schema ${columns.show}")
 
       // Telemetry
       totalBytes <- Ref[F].of(0L)
@@ -89,13 +83,7 @@ object CsvSink extends Logging {
         _.pure[F])
 
       ensureTable =
-        writeMode match {
-          case WriteMode.Create =>
-            createTable(tbl, colSpecs)
-
-          case WriteMode.Replace =>
-            dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
-        }
+        dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
 
       copy0 =
         Stream.eval(ensureTable).void ++
