@@ -26,7 +26,7 @@ lazy val core = project
 
     quasarPluginName := "postgres",
 
-    quasarPluginQuasarVersion := IO.read(file("./quasar-version")).trim,
+    quasarPluginQuasarVersion := managedVersions.value("slamdata-quasar"),
 
     quasarPluginDestinationFqcn := Some("quasar.plugin.postgres.PostgresDestinationModule$"),
 
@@ -48,7 +48,7 @@ lazy val core = project
 
       // Note that it looks like setSeconds is still incorrect even in current master
       // https://github.com/pgjdbc/pgjdbc/blob/2972add8e47d747655585fc423ac75c609f21c11/pgjdbc/src/main/java/org/postgresql/util/PGInterval.java#L369-L387
-      // (i.e. after PR 1658), given the stacktrace 
+      // (i.e. after PR 1658), given the stacktrace
       // https://gist.github.com/rintcius/c09bde9e5a6a6efec7461617e7fe4ca9
       "org.postgresql" % "postgresql" % "42.2.8"
     ),
