@@ -2,15 +2,17 @@ import scala.collection.Seq
 
 ThisBuild / scalaVersion := "2.12.10"
 
+ThisBuild / githubRepository := "quasar-destination-postgres"
+
 performMavenCentralSync in ThisBuild := false   // basically just ignores all the sonatype sync parts of things
 
 publishAsOSSProject in ThisBuild := true
 
-homepage in ThisBuild := Some(url("https://github.com/slamdata/quasar-destination-postgres"))
+homepage in ThisBuild := Some(url("https://github.com/precog/quasar-destination-postgres"))
 
 scmInfo in ThisBuild := Some(ScmInfo(
-  url("https://github.com/slamdata/quasar-destination-postgres"),
-  "scm:git@github.com:slamdata/quasar-destination-postgres.git"))
+  url("https://github.com/precog/quasar-destination-postgres"),
+  "scm:git@github.com:precog/quasar-destination-postgres.git"))
 
 val DoobieVersion = "0.8.8"
 
@@ -26,7 +28,7 @@ lazy val core = project
 
     quasarPluginName := "postgres",
 
-    quasarPluginQuasarVersion := managedVersions.value("slamdata-quasar"),
+    quasarPluginQuasarVersion := managedVersions.value("precog-quasar"),
 
     quasarPluginDestinationFqcn := Some("quasar.plugin.postgres.PostgresDestinationModule$"),
 
@@ -55,8 +57,8 @@ lazy val core = project
 
     libraryDependencies ++= Seq(
       "com.github.tototoshi" %% "scala-csv" % "1.3.6" % Test,
-      "com.slamdata" %% "qdata-core" % managedVersions.value("slamdata-qdata") % Test,
-      "com.slamdata" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
+      "com.precog" %% "qdata-core" % managedVersions.value("precog-qdata") % Test,
+      "com.precog" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
       "io.argonaut" %% "argonaut-scalaz" % "6.2.3" % Test
     ))
-  .enablePlugins(AutomateHeaderPlugin, QuasarPlugin)
+  .enablePlugins(QuasarPlugin)
