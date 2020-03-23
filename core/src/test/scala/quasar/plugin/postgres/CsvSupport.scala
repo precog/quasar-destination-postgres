@@ -31,6 +31,7 @@ import java.time._
 import qdata.time._
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource.ResourcePath
+import quasar.connector.{DataEvent, Offset}
 import quasar.connector.destination.ResultSink
 import quasar.connector.render.RenderConfig
 
@@ -55,8 +56,17 @@ trait CsvSupport {
       val treatEmptyLineAsNil = false
     }
 
+  def toUpsertSink[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, A](
+      dst: ResourcePath,
+      sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
+      renderRow: P,
+      records: Stream[F, DataEvent.Primitive[A, Offset]])
+      : Stream[F, Unit] = {
+    ???
+  }
+
   // TODO: handle includeHeader == true
-  def toCsvSink[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+  def toCreateSink[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       dst: ResourcePath,
       sink: ResultSink.CreateSink[F, ColumnType.Scalar],
       renderRow: P,
@@ -73,12 +83,19 @@ trait CsvSupport {
 
     val go = records.pull.peek1 flatMap {
       case Some((r, rs)) =>
-        val rkeys = r.keys.toList
-        val rtypes = r.values.map(asColumnType).toList
-        val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
-        val encoded = rs.through(encodeCsvRecords[F, renderRow.type, R, V, S](renderRow))
+        val rkeys: List[String] = r.keys.toList
+        val rtypes: List[ColumnType.Scalar] = r.values.map(asColumnType).toList
 
-        sink.consume(dst, NonEmptyList.fromListUnsafe(columns), encoded).pull.echo
+        val columns: List[Column[ColumnType.Scalar]] =
+          rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
+
+        val encoded: Stream[F, Byte] =
+          rs.through(encodeCsvRecords[F, renderRow.type, R, V, S](renderRow))
+
+        val back: Pull[F, Unit, Unit] =
+          sink.consume(dst, NonEmptyList.fromListUnsafe(columns), encoded).pull.echo
+
+        back
 
       case None => Pull.done
     }

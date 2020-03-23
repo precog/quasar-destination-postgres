@@ -18,16 +18,24 @@ package quasar.plugin
 
 import slamdata.Predef._
 
+import cats._
+import cats.data._
 import cats.effect.Sync
+import cats.implicits._
 
 import java.net.URI
 import java.time.format.{DateTimeFormatter, DateTimeFormatterBuilder, SignStyle}
 import java.time.temporal.ChronoField
 
+import quasar.api.{Column, ColumnType}
 import quasar.api.resource._
 import quasar.connector.render.RenderConfig
 
 import scala.util.Random
+
+import doobie._
+import doobie.implicits._
+import doobie.util.log.{ExecFailure, ProcessingFailure, Success}
 
 import org.slf4s.Logger
 
@@ -90,6 +98,79 @@ package object postgres {
   def tableFromPath(p: ResourcePath): Option[Table] =
     Some(p) collect {
       case table /: ResourcePath.Root => table
+    }
+
+  def createTable(log: Logger)(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
+    val preamble =
+      fr"CREATE TABLE IF NOT EXISTS" ++ Fragment.const(hygienicIdent(table))
+
+    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
+      .updateWithLogHandler(logHandler(log))
+      .run
+  }
+
+  def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] =
+    ((fr"CREATE INDEX IF NOT EXISTS ON" ++
+      Fragment.const(hygienicIdent(table))) ++
+      Fragments.parentheses(col))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
+  def deleteFrom(log: Logger)(table: Table, col: Fragment, values: NonEmptyList[Fragment]): ConnectionIO[Int] = {
+    val preamble =
+      fr"DELETE FROM" ++ Fragment.const(hygienicIdent(table)) ++ fr"WHERE"
+
+    val conditions = values.map(v => col ++ fr"=" ++ v)
+
+    (preamble ++ conditions.intercalate(fr"AND"))
+      .updateWithLogHandler(logHandler(log))
+      .run
+  }
+
+  def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
+    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
+  def specifyColumnFragments[F[_]: ApplicativeError[?[_], Throwable]](cols: NonEmptyList[Column[ColumnType.Scalar]])
+      : F[NonEmptyList[Fragment]] =
+    cols.traverse(columnSpec).fold(
+      invalid => ApplicativeError[F, Throwable].raiseError(new ColumnTypesNotSupported(invalid)),
+      _.pure[F])
+
+  def specifyColumnFragment[F[_]: ApplicativeError[?[_], Throwable]](col: Column[ColumnType.Scalar])
+      : F[Fragment] =
+    columnSpec(col).fold(
+      invalid => ApplicativeError[F, Throwable].raiseError(new ColumnTypesNotSupported(invalid)),
+      _.pure[F])
+
+  private def columnSpec(c: Column[ColumnType.Scalar]): ValidatedNel[ColumnType.Scalar, Fragment] =
+    pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
+
+  private val pgColumnType: ColumnType.Scalar => ValidatedNel[ColumnType.Scalar, Fragment] = {
+    case ColumnType.Null => fr0"smallint".validNel
+    case ColumnType.Boolean => fr0"boolean".validNel
+    case ColumnType.LocalTime => fr0"time".validNel
+    case ColumnType.OffsetTime => fr0"time with timezone".validNel
+    case ColumnType.LocalDate => fr0"date".validNel
+    case t @ ColumnType.OffsetDate => t.invalidNel
+    case ColumnType.LocalDateTime => fr0"timestamp".validNel
+    case ColumnType.OffsetDateTime => fr0"timestamp with time zone".validNel
+    case ColumnType.Interval => fr0"interval".validNel
+    case ColumnType.Number => fr0"numeric".validNel
+    case ColumnType.String => fr0"text".validNel
+  }
+
+  private def logHandler(log: Logger): LogHandler =
+    LogHandler {
+      case Success(q, _, e, p) =>
+        log.debug(s"SUCCESS: `$q` in ${(e + p).toMillis}ms (${e.toMillis} ms exec, ${p.toMillis} ms proc)")
+
+      case ExecFailure(q, _, e, t) =>
+        log.debug(s"EXECUTION_FAILURE: `$q` after ${e.toMillis} ms, detail: ${t.getMessage}", t)
+
+      case ProcessingFailure(q, _, e, p, t) =>
+        log.debug(s"PROCESSING_FAILURE: `$q` after ${(e + p).toMillis} ms (${e.toMillis} ms exec, ${p.toMillis} ms proc (failed)), detail: ${t.getMessage}", t)
     }
 
   def error[F[_]: Sync](log: Logger)(msg: => String, cause: => Throwable): F[Unit] =

@@ -29,9 +29,10 @@ import doobie._
 import doobie.implicits._
 import doobie.postgres._
 import doobie.postgres.implicits._
-import doobie.util.log.{ExecFailure, ProcessingFailure, Success}
 
 import fs2.{Chunk, Pipe, Stream}
+
+import org.postgresql.copy.CopyIn
 
 import org.slf4s.Logging
 
@@ -78,12 +79,10 @@ object CsvCreateSink extends Logging {
           .translate(Effect.toIOK[F] andThen LiftIO.liftK[CopyManagerIO])
           .through(copyToTable(tbl, columns))
 
-      colSpecs <- columns.traverse(columnSpec).fold(
-        invalid => AE.raiseError(new ColumnTypesNotSupported(invalid)),
-        _.pure[F])
+      colSpecs <- specifyColumnFragments[F](columns)
 
       ensureTable =
-        dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
+        dropTableIfExists(log)(tbl) >> createTable(log)(tbl, colSpecs)
 
       copy0 =
         Stream.eval(ensureTable).void ++
@@ -107,18 +106,6 @@ object CsvCreateSink extends Logging {
 
   ////
 
-  private val logHandler: LogHandler =
-    LogHandler {
-      case Success(q, _, e, p) =>
-        log.debug(s"SUCCESS: `$q` in ${(e + p).toMillis}ms (${e.toMillis} ms exec, ${p.toMillis} ms proc)")
-
-      case ExecFailure(q, _, e, t) =>
-        log.debug(s"EXECUTION_FAILURE: `$q` after ${e.toMillis} ms, detail: ${t.getMessage}", t)
-
-      case ProcessingFailure(q, _, e, p, t) =>
-        log.debug(s"PROCESSING_FAILURE: `$q` after ${(e + p).toMillis} ms (${e.toMillis} ms exec, ${p.toMillis} ms proc (failed)), detail: ${t.getMessage}", t)
-    }
-
   private def logChunkSize[F[_]: Sync](c: Chunk[Byte]): F[Unit] =
     trace[F](log)(s"Sending ${c.size} bytes")
 
@@ -139,7 +126,7 @@ object CsvCreateSink extends Logging {
 
     val logStart = debug[CopyManagerIO](log)(s"BEGIN COPY: `${copyQuery}`")
 
-    val startCopy =
+    val startCopy: Stream[CopyManagerIO, CopyIn] =
       Stream.bracketCase(PFCM.copyIn(copyQuery) <* logStart) { (pgci, exitCase) =>
         PFCM.embed(pgci, exitCase match {
           case ExitCase.Completed => PFCI.endCopy.void
@@ -149,39 +136,8 @@ object CsvCreateSink extends Logging {
 
     in => startCopy flatMap { pgci =>
       in.map(_.toBytes) evalMap { bs =>
-        PFCM.embed(pgci, PFCI.writeToCopy(bs.values, bs.offset, bs.length))
+        PFCM.embed(pgci, PFCI.writeToCopy(bs.values, bs.offset, bs.length)): CopyManagerIO[Unit]
       }
     }
-  }
-
-  private def createTable(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
-    val preamble =
-      fr"CREATE TABLE" ++ Fragment.const(hygienicIdent(table))
-
-    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
-      .updateWithLogHandler(logHandler)
-      .run
-  }
-
-  private def dropTableIfExists(table: Table): ConnectionIO[Int] =
-    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler)
-      .run
-
-  private def columnSpec(c: Column[ColumnType.Scalar]): ValidatedNel[ColumnType.Scalar, Fragment] =
-    pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
-
-  private val pgColumnType: ColumnType.Scalar => ValidatedNel[ColumnType.Scalar, Fragment] = {
-    case ColumnType.Null => fr0"smallint".validNel
-    case ColumnType.Boolean => fr0"boolean".validNel
-    case ColumnType.LocalTime => fr0"time".validNel
-    case ColumnType.OffsetTime => fr0"time with timezone".validNel
-    case ColumnType.LocalDate => fr0"date".validNel
-    case t @ ColumnType.OffsetDate => t.invalidNel
-    case ColumnType.LocalDateTime => fr0"timestamp".validNel
-    case ColumnType.OffsetDateTime => fr0"timestamp with time zone".validNel
-    case ColumnType.Interval => fr0"interval".validNel
-    case ColumnType.Number => fr0"numeric".validNel
-    case ColumnType.String => fr0"text".validNel
   }
 }

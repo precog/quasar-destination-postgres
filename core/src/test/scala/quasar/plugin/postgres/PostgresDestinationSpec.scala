@@ -91,9 +91,10 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
   }
 
-  "csv sink" should {
+  // TODO test the relevant parts in both sinks
+  "csv create sink" should {
     "reject empty paths with NotAResource" >>* {
-      csv(config()) { sink =>
+      create(config()) { sink =>
         val p = ResourcePath.root()
         val r = sink.consume(p, NonEmptyList.one(Column("a", ColumnType.Boolean)), Stream.empty).compile.drain
 
@@ -104,7 +105,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
 
     "reject paths with > 1 segments with NotAResource" >>* {
-      csv(config()) { sink =>
+      create(config()) { sink =>
         val p = ResourcePath.root() / ResourceName("foo") / ResourceName("bar")
         val r = sink.consume(p, NonEmptyList.one(Column("a", ColumnType.Boolean)), Stream.empty).compile.drain
 
@@ -122,7 +123,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         val cfg = config(url = TestConnectionUrl)
         val rs = Stream(("min" ->> MinOffsetDate) :: ("max" ->> MaxOffsetDate) :: HNil)
 
-        csv(cfg)(drainAndSelectAs[IO, String :: String :: HNil](TestConnectionUrl, table, _, rs))
+        create(cfg)(drainAndSelectAs[IO, String :: String :: HNil](TestConnectionUrl, table, _, rs))
           .attempt
           .map(_ must beLeft.like {
             case ColumnTypesNotSupported(ts) => ts.toList must contain(ColumnType.OffsetDate: ColumnType)
@@ -131,7 +132,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
 
     "quote table names to prevent injection" >>* {
-      csv(config()) { sink =>
+      create(config()) { sink =>
         val recs = List(("x" ->> 2.3) :: ("y" ->> 8.1) :: HNil)
 
         drainAndSelect(
@@ -144,7 +145,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
 
     "support table names containing double quote" >>* {
-      csv(config()) { sink =>
+      create(config()) { sink =>
         val recs = List(("x" ->> 934.23) :: ("y" ->> 1234424.1239847) :: HNil)
 
         drainAndSelect(
@@ -165,7 +166,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
 
     "create an empty table when input is empty" >>* {
-      csv(config()) { sink =>
+      create(config()) { sink =>
         type R = Record.`"a" -> String, "b" -> Int, "c" -> LocalDate`.T
 
         for {
@@ -181,7 +182,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       ("foo" ->> 3) :: ("bar" ->> "baz3") :: ("quux" ->> 36.34234) :: HNil)
 
     "overwrite any existing table with the same name" >>* {
-      csv(config()) { sink =>
+      create(config()) { sink =>
         val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
         val r2 = ("a" ->> "b") :: ("c" ->> "d") :: HNil
 
@@ -212,7 +213,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         val cfg = config(url = TestConnectionUrl)
         val rs = Stream(("value" ->> "") :: HNil)
 
-        csv(cfg)(drainAndSelectAs[IO, Option[String]](TestConnectionUrl, table, _, rs))
+        create(cfg)(drainAndSelectAs[IO, Option[String]](TestConnectionUrl, table, _, rs))
           .map(_ must_=== List(None))
       }
     }
@@ -280,6 +281,12 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       HNil)
   }
 
+  "csv upsert sink" should {
+    "stuff" in {
+      ko
+    }
+  }
+
   val DM = PostgresDestinationModule
 
   val TestConnectionUrl: String = "postgresql://localhost:54322/postgres?user=postgres&password=postgres"
@@ -304,7 +311,19 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     ("schema" := schema) ->:
     jEmptyObject
 
-  def csv[A](cfg: Json)(f: ResultSink.CreateSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
+  def upsert[A](cfg: Json)(f: ResultSink.UpsertSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
+    dest(cfg) {
+      case Left(err) =>
+        IO.raiseError(new RuntimeException(err.shows))
+
+      case Right(dst) =>
+        dst.sinks.toList
+          .collectFirst { case c @ ResultSink.UpsertSink(_: RenderConfig.Csv, _) => c }
+          .map(s => f(s.asInstanceOf[ResultSink.UpsertSink[IO, ColumnType.Scalar]]))
+          .getOrElse(IO.raiseError(new RuntimeException("No CSV sink upsert found!")))
+    }
+
+  def create[A](cfg: Json)(f: ResultSink.CreateSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
     dest(cfg) {
       case Left(err) =>
         IO.raiseError(new RuntimeException(err.shows))
@@ -313,7 +332,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         dst.sinks.toList
           .collectFirst { case c @ ResultSink.CreateSink(_: RenderConfig.Csv, _) => c }
           .map(s => f(s.asInstanceOf[ResultSink.CreateSink[IO, ColumnType.Scalar]]))
-          .getOrElse(IO.raiseError(new RuntimeException("No CSV sink found!")))
+          .getOrElse(IO.raiseError(new RuntimeException("No CSV create sink found!")))
     }
 
   def dest[A](cfg: Json)(f: Either[DM.InitErr, Destination[IO]] => IO[A]): IO[A] =
@@ -371,7 +390,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             val q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
 
             val run = for {
-              _ <- toCsvSink(dst, sink, renderRow, rs).compile.drain
+              _ <- toCreateSink(dst, sink, renderRow, rs).compile.drain
               rows <- runDb[F, List[A]](q.query[A].to[List], connectionUri)
             } yield rows
 
@@ -404,7 +423,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       val cfg = config(url = TestConnectionUrl)
       val rs = record +: records
 
-      csv(cfg)(drainAndSelect(TestConnectionUrl, table, _, Stream.emits(rs)))
+      create(cfg)(drainAndSelect(TestConnectionUrl, table, _, Stream.emits(rs)))
     }
 
   def mustRoundtrip[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
