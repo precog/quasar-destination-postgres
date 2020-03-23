@@ -29,6 +29,8 @@ import quasar.connector.render.RenderConfig
 
 import scala.util.Random
 
+import org.slf4s.Logger
+
 package object postgres {
 
   type Ident = String
@@ -89,4 +91,13 @@ package object postgres {
     Some(p) collect {
       case table /: ResourcePath.Root => table
     }
+
+  def error[F[_]: Sync](log: Logger)(msg: => String, cause: => Throwable): F[Unit] =
+    Sync[F].delay(log.error(msg, cause))
+
+  def debug[F[_]: Sync](log: Logger)(msg: => String): F[Unit] =
+    Sync[F].delay(log.debug(msg))
+
+  def trace[F[_]: Sync](log: Logger)(msg: => String): F[Unit] =
+    Sync[F].delay(log.trace(msg))
 }
