@@ -14,6 +14,14 @@ scmInfo in ThisBuild := Some(ScmInfo(
   url("https://github.com/precog/quasar-destination-postgres"),
   "scm:git@github.com:precog/quasar-destination-postgres.git"))
 
+ThisBuild / githubWorkflowBuildMatrixAdditions +=
+  "postgres" -> List("9", "10", "11")
+
+ThisBuild / githubWorkflowBuildPreamble +=
+  WorkflowStep.Run(
+    List("docker-compose up -d postgres${{ matrix.postgres }}"),
+    name = Some("Start postgres ${{ matrix.postgres }} container"))
+
 val DoobieVersion = "0.8.8"
 
 lazy val root = project
