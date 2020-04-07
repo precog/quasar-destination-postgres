@@ -83,6 +83,7 @@ object CsvSink extends Logging {
       action = writeMode match {
         case WriteMode.Create => "Creating"
         case WriteMode.Replace => "Replacing"
+        case WriteMode.Truncate => "Truncating"
       }
 
       _ <- debug[F](s"${action} '${tbl}' with schema ${cols.show}")
@@ -110,6 +111,9 @@ object CsvSink extends Logging {
 
           case WriteMode.Replace =>
             dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
+
+          case WriteMode.Truncate =>
+            truncateTableIfExists(tbl)
         }
 
       copy0 =
@@ -198,6 +202,11 @@ object CsvSink extends Logging {
 
   private def dropTableIfExists(table: Table): ConnectionIO[Int] =
     (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
+      .updateWithLogHandler(logHandler)
+      .run
+
+  private def truncateTableIfExists(table: Table): ConnectionIO[Int] =
+    (fr"TRUNCATE" ++ Fragment.const(hygienicIdent(table)))
       .updateWithLogHandler(logHandler)
       .run
 

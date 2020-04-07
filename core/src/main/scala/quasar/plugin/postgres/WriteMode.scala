@@ -27,17 +27,20 @@ sealed trait WriteMode extends Product with Serializable
 object WriteMode {
   case object Create extends WriteMode
   case object Replace extends WriteMode
+  case object Truncate extends WriteMode
 
   implicit val codecJson: CodecJson[WriteMode] =
     CodecJson(
       _ match {
         case Create => jString("create")
         case Replace => jString("replace")
+        case Truncate => jString("truncate")
       },
       c => c.as[String] flatMap {
         case "create" => DecodeResult.ok(Create)
         case "replace" => DecodeResult.ok(Replace)
-        case _ => DecodeResult.fail("Valid write modes are 'create' and 'replace'", c.history)
+        case "truncate" => DecodeResult.ok(Truncate)
+        case _ => DecodeResult.fail("Valid write modes are 'create', 'truncate' and 'replace'", c.history)
       })
 
   implicit val eqv: Eq[WriteMode] =
