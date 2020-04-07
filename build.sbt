@@ -1,16 +1,28 @@
 import scala.collection.Seq
 
+ThisBuild / scalaVersion := "2.12.10"
+
+ThisBuild / githubRepository := "quasar-destination-postgres"
+
 performMavenCentralSync in ThisBuild := false   // basically just ignores all the sonatype sync parts of things
 
 publishAsOSSProject in ThisBuild := true
 
-homepage in ThisBuild := Some(url("https://github.com/slamdata/quasar-destination-postgres"))
+homepage in ThisBuild := Some(url("https://github.com/precog/quasar-destination-postgres"))
 
 scmInfo in ThisBuild := Some(ScmInfo(
-  url("https://github.com/slamdata/quasar-destination-postgres"),
-  "scm:git@github.com:slamdata/quasar-destination-postgres.git"))
+  url("https://github.com/precog/quasar-destination-postgres"),
+  "scm:git@github.com:precog/quasar-destination-postgres.git"))
 
-val DoobieVersion = "0.7.0"
+ThisBuild / githubWorkflowBuildMatrixAdditions +=
+  "postgres" -> List("9", "10", "11")
+
+ThisBuild / githubWorkflowBuildPreamble +=
+  WorkflowStep.Run(
+    List("docker-compose up -d postgres${{ matrix.postgres }}"),
+    name = Some("Start postgres ${{ matrix.postgres }} container"))
+
+val DoobieVersion = "0.8.8"
 
 lazy val root = project
   .in(file("."))
@@ -24,7 +36,7 @@ lazy val core = project
 
     quasarPluginName := "postgres",
 
-    quasarPluginQuasarVersion := IO.read(file("./quasar-version")).trim,
+    quasarPluginQuasarVersion := managedVersions.value("precog-quasar"),
 
     quasarPluginDestinationFqcn := Some("quasar.plugin.postgres.PostgresDestinationModule$"),
 
@@ -36,13 +48,25 @@ lazy val core = project
       "org.slf4s"    %% "slf4s-api"       % "1.7.25",
       "org.tpolecat" %% "doobie-core"     % DoobieVersion,
       "org.tpolecat" %% "doobie-hikari"   % DoobieVersion,
-      "org.tpolecat" %% "doobie-postgres" % DoobieVersion
+      // Some trickery to be able to use a lower version in quasarPluginDependencies
+      // With a normal libraryDependencies just adding
+      // `"org.postgresql" % "postgresql" % "42.2.8" force()` should work
+      // Now doing an exclude and readd instead.
+      "org.tpolecat" %% "doobie-postgres" % DoobieVersion  exclude("org.postgresql", "postgresql"),
+      // can't use 42.2.9 because it includes https://github.com/pgjdbc/pgjdbc/pull/1612
+      // which at least needs https://github.com/pgjdbc/pgjdbc/pull/1658
+
+      // Note that it looks like setSeconds is still incorrect even in current master
+      // https://github.com/pgjdbc/pgjdbc/blob/2972add8e47d747655585fc423ac75c609f21c11/pgjdbc/src/main/java/org/postgresql/util/PGInterval.java#L369-L387
+      // (i.e. after PR 1658), given the stacktrace
+      // https://gist.github.com/rintcius/c09bde9e5a6a6efec7461617e7fe4ca9
+      "org.postgresql" % "postgresql" % "42.2.8"
     ),
 
     libraryDependencies ++= Seq(
       "com.github.tototoshi" %% "scala-csv" % "1.3.6" % Test,
-      "com.slamdata" %% "qdata-core" % "10.0.31" % Test,
-      "com.slamdata" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
+      "com.precog" %% "qdata-core" % managedVersions.value("precog-qdata") % Test,
+      "com.precog" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
       "io.argonaut" %% "argonaut-scalaz" % "6.2.3" % Test
     ))
-  .enablePlugins(AutomateHeaderPlugin, QuasarPlugin)
+  .enablePlugins(QuasarPlugin)

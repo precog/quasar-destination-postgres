@@ -1,5 +1,5 @@
 /*
- * Copyright 2014–2019 SlamData Inc.
+ * Copyright 2020 Precog Data
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +16,7 @@
 
 package quasar.plugin.postgres
 
-import slamdata.Predef.{Stream => _, _}
+import slamdata.Predef._
 
 import cats._
 import cats.arrow.FunctionK
@@ -33,24 +33,20 @@ import doobie.util.log.{ExecFailure, ProcessingFailure, Success}
 
 import fs2.{Chunk, Pipe, Stream}
 
-import java.lang.IllegalArgumentException
-
 import org.slf4s.Logging
 
-import quasar.connector._
+import quasar.api.{Column, ColumnType}
 import quasar.api.resource._
-import quasar.api.table.{ColumnType, TableColumn}
+import quasar.connector._
 
 import scala.concurrent.duration.MILLISECONDS
 
-import shims._
-
-object CsvSink extends Logging {
+object CsvCreateSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
       xa: Transactor[F],
       writeMode: WriteMode)(
       dst: ResourcePath,
-      columns: List[TableColumn],
+      columns: NonEmptyList[Column[ColumnType.Scalar]],
       data: Stream[F, Byte])(
       implicit timer: Timer[F])
       : Stream[F, Unit] = {
@@ -66,19 +62,8 @@ object CsvSink extends Logging {
           MonadResourceErr[F].raiseError(ResourceError.notAResource(dst))
       }
 
-    val tableColumns =
-      columns.toNel match {
-        case Some(cols) =>
-          cols.pure[F]
-
-        case None =>
-          AE.raiseError(new IllegalArgumentException("No columns specified."))
-      }
-
     Stream.force(for {
       tbl <- table
-
-      cols <- tableColumns
 
       action = writeMode match {
         case WriteMode.Create => "Creating"
@@ -86,7 +71,7 @@ object CsvSink extends Logging {
         case WriteMode.Truncate => "Truncating"
       }
 
-      _ <- debug[F](s"${action} '${tbl}' with schema ${cols.show}")
+      _ <- debug[F](log)(s"${action} '${tbl}'")
 
       // Telemetry
       totalBytes <- Ref[F].of(0L)
@@ -98,9 +83,9 @@ object CsvSink extends Logging {
           .evalTap(recordChunks[F](totalBytes))
           // TODO: Is there a better way?
           .translate(Effect.toIOK[F] andThen LiftIO.liftK[CopyManagerIO])
-          .through(copyToTable(tbl, cols))
+          .through(copyToTable(tbl, columns))
 
-      colSpecs <- cols.traverse(columnSpec).fold(
+      colSpecs <- columns.traverse(columnSpec).fold(
         invalid => AE.raiseError(new ColumnTypesNotSupported(invalid)),
         _.pure[F])
 
@@ -122,14 +107,14 @@ object CsvSink extends Logging {
 
       copy = copy0.transact(xa) handleErrorWith { t =>
         Stream.eval(
-          error[F](s"COPY to '${tbl}' produced unexpected error: ${t.getMessage}", t) >>
+          error[F](log)(s"COPY to '${tbl}' produced unexpected error: ${t.getMessage}", t) >>
             AE.raiseError(t))
       }
 
       logEnd = for {
         endAt <- timer.clock.monotonic(MILLISECONDS)
         tbytes <- totalBytes.get
-        _ <- debug[F](s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
+        _ <- debug[F](log)(s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
       } yield ()
 
 
@@ -150,22 +135,16 @@ object CsvSink extends Logging {
         log.debug(s"PROCESSING_FAILURE: `$q` after ${(e + p).toMillis} ms (${e.toMillis} ms exec, ${p.toMillis} ms proc (failed)), detail: ${t.getMessage}", t)
     }
 
-  private def error[F[_]: Sync](msg: => String, cause: => Throwable): F[Unit] =
-    Sync[F].delay(log.error(msg, cause))
-
-  private def debug[F[_]: Sync](msg: => String): F[Unit] =
-    Sync[F].delay(log.debug(msg))
-
-  private def trace[F[_]: Sync](msg: => String): F[Unit] =
-    Sync[F].delay(log.trace(msg))
-
   private def logChunkSize[F[_]: Sync](c: Chunk[Byte]): F[Unit] =
-    trace[F](s"Sending ${c.size} bytes")
+    trace[F](log)(s"Sending ${c.size} bytes")
 
   private def recordChunks[F[_]: Sync](total: Ref[F, Long])(c: Chunk[Byte]): F[Unit] =
     total.update(_ + c.size) >> logChunkSize[F](c)
 
-  private def copyToTable(table: Table, columns: NonEmptyList[TableColumn]): Pipe[CopyManagerIO, Chunk[Byte], Unit] = {
+  private def copyToTable(
+      table: Table,
+      columns: NonEmptyList[Column[ColumnType.Scalar]])
+      : Pipe[CopyManagerIO, Chunk[Byte], Unit] = {
     val cols =
       columns
         .map(c => hygienicIdent(c.name))
@@ -174,7 +153,7 @@ object CsvSink extends Logging {
     val copyQuery =
       s"COPY ${hygienicIdent(table)} ($cols) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
 
-    val logStart = debug[CopyManagerIO](s"BEGIN COPY: `${copyQuery}`")
+    val logStart = debug[CopyManagerIO](log)(s"BEGIN COPY: `${copyQuery}`")
 
     val startCopy =
       Stream.bracketCase(PFCM.copyIn(copyQuery) <* logStart) { (pgci, exitCase) =>
@@ -210,8 +189,8 @@ object CsvSink extends Logging {
       .updateWithLogHandler(logHandler)
       .run
 
-  private def columnSpec(tc: TableColumn): ValidatedNel[ColumnType.Scalar, Fragment] =
-    pgColumnType(tc.tpe).map(Fragment.const(hygienicIdent(tc.name)) ++ _)
+  private def columnSpec(c: Column[ColumnType.Scalar]): ValidatedNel[ColumnType.Scalar, Fragment] =
+    pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
 
   private val pgColumnType: ColumnType.Scalar => ValidatedNel[ColumnType.Scalar, Fragment] = {
     case ColumnType.Null => fr0"smallint".validNel

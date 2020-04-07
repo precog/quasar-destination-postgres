@@ -1,5 +1,5 @@
 /*
- * Copyright 2014–2019 SlamData Inc.
+ * Copyright 2020 Precog Data
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -24,10 +24,12 @@ import java.net.URI
 import java.time.format.{DateTimeFormatter, DateTimeFormatterBuilder, SignStyle}
 import java.time.temporal.ChronoField
 
-import quasar.api.push.RenderConfig
 import quasar.api.resource._
+import quasar.connector.render.RenderConfig
 
 import scala.util.Random
+
+import org.slf4s.Logger
 
 package object postgres {
 
@@ -89,4 +91,13 @@ package object postgres {
     Some(p) collect {
       case table /: ResourcePath.Root => table
     }
+
+  def error[F[_]: Sync](log: Logger)(msg: => String, cause: => Throwable): F[Unit] =
+    Sync[F].delay(log.error(msg, cause))
+
+  def debug[F[_]: Sync](log: Logger)(msg: => String): F[Unit] =
+    Sync[F].delay(log.debug(msg))
+
+  def trace[F[_]: Sync](log: Logger)(msg: => String): F[Unit] =
+    Sync[F].delay(log.trace(msg))
 }

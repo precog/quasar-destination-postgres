@@ -1,5 +1,5 @@
 /*
- * Copyright 2014–2019 SlamData Inc.
+ * Copyright 2020 Precog Data
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,23 +16,23 @@
 
 package quasar.plugin.postgres
 
+import cats.data.NonEmptyList
 import cats.effect.{Effect, Timer}
 
 import doobie.Transactor
 
 import quasar.api.destination._
 import quasar.connector.MonadResourceErr
-
-import scalaz.NonEmptyList
+import quasar.connector.destination._
 
 final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     xa: Transactor[F],
     writeMode: WriteMode)
-    extends Destination[F] {
+    extends LegacyDestination[F] {
 
   val destinationType: DestinationType =
     PostgresDestinationModule.destinationType
 
-  val sinks: NonEmptyList[ResultSink[F]] =
-    NonEmptyList(ResultSink.csv(PostgresCsvConfig)(CsvSink(xa, writeMode)))
+  val sinks: NonEmptyList[ResultSink[F, Type]] =
+    NonEmptyList.one(ResultSink.create(PostgresCsvConfig)(CsvCreateSink(xa, writeMode)))
 }

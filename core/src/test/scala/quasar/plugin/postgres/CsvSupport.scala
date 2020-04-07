@@ -1,5 +1,5 @@
 /*
- * Copyright 2014–2019 SlamData Inc.
+ * Copyright 2020 Precog Data
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,9 +16,10 @@
 
 package quasar.plugin.postgres
 
-import slamdata.Predef.{Stream => _, _}
+import slamdata.Predef._
 
 import cats.ApplicativeError
+import cats.data.NonEmptyList
 
 import com.github.tototoshi.csv._
 
@@ -28,10 +29,10 @@ import java.io.ByteArrayOutputStream
 import java.time._
 
 import qdata.time._
-import quasar.api.destination._
-import quasar.api.push.RenderConfig
+import quasar.api.{Column, ColumnType}
 import quasar.api.resource.ResourcePath
-import quasar.api.table.{ColumnType, TableColumn}
+import quasar.connector.destination.ResultSink
+import quasar.connector.render.RenderConfig
 
 import scala.Float
 import scala.collection.immutable.Seq
@@ -57,7 +58,7 @@ trait CsvSupport {
   // TODO: handle includeHeader == true
   def toCsvSink[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       dst: ResourcePath,
-      sink: ResultSink.Csv[F],
+      sink: ResultSink.CreateSink[F, ColumnType.Scalar],
       renderRow: P,
       records: Stream[F, R])(
       implicit
@@ -74,10 +75,10 @@ trait CsvSupport {
       case Some((r, rs)) =>
         val rkeys = r.keys.toList
         val rtypes = r.values.map(asColumnType).toList
-        val columns = rkeys.zip(rtypes).map((TableColumn(_, _)).tupled)
+        val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
         val encoded = rs.through(encodeCsvRecords[F, renderRow.type, R, V, S](renderRow))
 
-        sink.run(dst, columns, encoded).pull.echo
+        sink.consume(dst, NonEmptyList.fromListUnsafe(columns), encoded).pull.echo
 
       case None => Pull.done
     }
