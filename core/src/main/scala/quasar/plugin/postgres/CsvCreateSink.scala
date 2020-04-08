@@ -98,7 +98,7 @@ object CsvCreateSink extends Logging {
             dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
 
           case WriteMode.Truncate =>
-            truncateTableIfExists(tbl)
+            createTableIfNotExists(tbl, colSpecs) >> truncateTableIfExists(tbl)
         }
 
       copy0 =
@@ -173,6 +173,15 @@ object CsvCreateSink extends Logging {
   private def createTable(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
     val preamble =
       fr"CREATE TABLE" ++ Fragment.const(hygienicIdent(table))
+
+    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
+      .updateWithLogHandler(logHandler)
+      .run
+  }
+  
+    private def createTableIfNotExists(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
+    val preamble =
+      fr"CREATE TABLE IF NOT EXISTS" ++ Fragment.const(hygienicIdent(table))
 
     (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
       .updateWithLogHandler(logHandler)
