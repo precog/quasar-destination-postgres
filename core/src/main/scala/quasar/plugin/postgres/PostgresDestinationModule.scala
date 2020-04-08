@@ -101,7 +101,7 @@ object PostgresDestinationModule extends DestinationModule with Logging {
       _ <- EitherT.right[InitErr](Resource.liftF(Sync[F].delay(
         log.info(s"Initialized postgres destination: tag = $suffix, config = ${cfg.sanitized.asJson}"))))
 
-    } yield new PostgresDestination(xa): Destination[F]
+    } yield new PostgresDestination(xa, cfg.writeMode.getOrElse(WriteMode.Replace)): Destination[F]
 
     init.value
   }

@@ -26,12 +26,13 @@ import quasar.connector.MonadResourceErr
 import quasar.connector.destination._
 
 final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
-    xa: Transactor[F])
+    xa: Transactor[F],
+    writeMode: WriteMode)
     extends LegacyDestination[F] {
 
   val destinationType: DestinationType =
     PostgresDestinationModule.destinationType
 
   val sinks: NonEmptyList[ResultSink[F, Type]] =
-    NonEmptyList.one(ResultSink.create(PostgresCsvConfig)(CsvCreateSink(xa)))
+    NonEmptyList.one(ResultSink.create(PostgresCsvConfig)(CsvCreateSink(xa, writeMode)))
 }

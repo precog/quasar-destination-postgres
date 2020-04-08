@@ -43,7 +43,8 @@ import scala.concurrent.duration.MILLISECONDS
 
 object CsvCreateSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
-      xa: Transactor[F])(
+      xa: Transactor[F],
+      writeMode: WriteMode)(
       dst: ResourcePath,
       columns: NonEmptyList[Column[ColumnType.Scalar]],
       data: Stream[F, Byte])(
@@ -64,7 +65,13 @@ object CsvCreateSink extends Logging {
     Stream.force(for {
       tbl <- table
 
-      _ <- debug[F](log)(s"Replacing '${tbl}' with schema ${columns.show}")
+      action = writeMode match {
+        case WriteMode.Create => "Creating"
+        case WriteMode.Replace => "Replacing"
+        case WriteMode.Truncate => "Truncating"
+      }
+
+      _ <- debug[F](log)(s"${action} '${tbl}'")
 
       // Telemetry
       totalBytes <- Ref[F].of(0L)
@@ -83,7 +90,16 @@ object CsvCreateSink extends Logging {
         _.pure[F])
 
       ensureTable =
-        dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
+        writeMode match {
+          case WriteMode.Create =>
+            createTable(tbl, colSpecs)
+
+          case WriteMode.Replace =>
+            dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
+
+          case WriteMode.Truncate =>
+            truncateTableIfExists(tbl)
+        }
 
       copy0 =
         Stream.eval(ensureTable).void ++
@@ -165,6 +181,11 @@ object CsvCreateSink extends Logging {
 
   private def dropTableIfExists(table: Table): ConnectionIO[Int] =
     (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
+      .updateWithLogHandler(logHandler)
+      .run
+
+  private def truncateTableIfExists(table: Table): ConnectionIO[Int] =
+    (fr"TRUNCATE" ++ Fragment.const(hygienicIdent(table)))
       .updateWithLogHandler(logHandler)
       .run
 

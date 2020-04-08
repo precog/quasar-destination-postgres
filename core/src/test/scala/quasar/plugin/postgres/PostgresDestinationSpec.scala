@@ -302,6 +302,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   def config(url: String = TestConnectionUrl, schema: Option[String] = None): Json =
     ("connectionUri" := url) ->:
     ("schema" := schema) ->:
+    ("writeMode" := jNull) ->:
     jEmptyObject
 
   def csv[A](cfg: Json)(f: ResultSink.CreateSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
