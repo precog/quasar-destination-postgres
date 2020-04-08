@@ -282,7 +282,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
   val DM = PostgresDestinationModule
 
-  val TestConnectionUrl: String = "postgresql://localhost:5432/postgres?user=postgres&password=postgres"
+  val TestConnectionUrl: String = "postgresql://localhost:54322/postgres?user=postgres&password=postgres"
 
   implicit val CS: ContextShift[IO] = IO.contextShift(global)
 
