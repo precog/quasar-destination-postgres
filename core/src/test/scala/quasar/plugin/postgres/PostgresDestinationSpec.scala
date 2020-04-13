@@ -98,8 +98,11 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         ("schema" := "some_schema") ->:
         jEmptyObject
 
-      cfg.as[Config].toEither must beRight(
-        Config(uri, Some("some_schema"), None))
+      val parsed =
+        Config(uri, Some("some_schema"), None)
+
+      cfg.as[Config].toEither must beRight(parsed)
+      parsed.asJson must_== cfg
     }
 
     "parses a configuration with WriteMode" >> {
@@ -111,8 +114,11 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         ("writeMode" := "truncate") ->:
         jEmptyObject
 
-      cfg.as[Config].toEither must beRight(
-        Config(uri, Some("some_schema"), Some(WriteMode.Truncate)))
+      val parsed = Config(
+        uri, Some("some_schema"), Some(WriteMode.Truncate))
+
+      cfg.as[Config].toEither must beRight(parsed)
+      parsed.asJson must_== cfg
     }
   }
 
