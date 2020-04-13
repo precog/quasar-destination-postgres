@@ -89,6 +89,31 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         case _ => ko("Expected a connection failed")
       }))
     }
+
+    "parses a configuration without WriteMode" >> {
+      val uri = new URI("postgresql://localhost:1234/foobar")
+
+      val cfg =
+        ("connectionUri" := "postgresql://localhost:1234/foobar") ->:
+        ("schema" := "some_schema") ->:
+        jEmptyObject
+
+      cfg.as[Config].toEither must beRight(
+        Config(uri, Some("some_schema"), None))
+    }
+
+    "parses a configuration with WriteMode" >> {
+      val uri = new URI("postgresql://localhost:1234/foobar")
+
+      val cfg =
+        ("connectionUri" := "postgresql://localhost:1234/foobar") ->:
+        ("schema" := "some_schema") ->:
+        ("writeMode" := "truncate") ->:
+        jEmptyObject
+
+      cfg.as[Config].toEither must beRight(
+        Config(uri, Some("some_schema"), Some(WriteMode.Truncate)))
+    }
   }
 
   "csv sink" should {
@@ -282,7 +307,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
   val DM = PostgresDestinationModule
 
-  val TestConnectionUrl: String = "postgresql://localhost:54322/postgres?user=postgres&password=postgres"
+  val TestConnectionUrl: String = "postgresql://localhost:5432/postgres?user=postgres&password=postgres"
 
   implicit val CS: ContextShift[IO] = IO.contextShift(global)
 
@@ -302,7 +327,6 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   def config(url: String = TestConnectionUrl, schema: Option[String] = None): Json =
     ("connectionUri" := url) ->:
     ("schema" := schema) ->:
-    ("writeMode" := jNull) ->:
     jEmptyObject
 
   def csv[A](cfg: Json)(f: ResultSink.CreateSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =

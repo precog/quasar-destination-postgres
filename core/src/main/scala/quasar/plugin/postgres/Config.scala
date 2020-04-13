@@ -78,6 +78,14 @@ object Config {
     implicit val uriEncodeJson: EncodeJson[URI] =
       EncodeJson.of[String].contramap(_.toString)
 
-    casecodec3(Config.apply, Config.unapply)("connectionUri", "schema", "writeMode")
+    CodecJson(cfg =>
+      ("connectionUri" := cfg.connectionUri) ->:
+      ("schema" := cfg.schema) ->:
+      ("writeMode" :=?  cfg.writeMode) ->?:
+      jEmptyObject, c => for {
+        uri <- c.downField("connectionUri").as[URI]
+        schema <- c.downField("schema").as[Option[String]]
+        writeMode <- c.downField("writeMode").as[Option[WriteMode]]
+      } yield Config(uri, schema, writeMode))
   }
 }
