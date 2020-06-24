@@ -28,8 +28,6 @@ import doobie._
 import doobie.hikari.HikariTransactor
 import doobie.implicits._
 
-import eu.timepit.refined.auto._
-
 import java.util.concurrent.Executors
 
 import org.slf4s.Logging
