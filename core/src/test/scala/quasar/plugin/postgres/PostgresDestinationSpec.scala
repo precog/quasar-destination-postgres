@@ -318,7 +318,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
 
   def dest[A](cfg: Json)(f: Either[DM.InitErr, Destination[IO]] => IO[A]): IO[A] =
-    DM.destination[IO](cfg).use(f)
+    DM.destination[IO](cfg, _ => _ => Stream.empty).use(f)
 
   def drainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       connectionUri: String,
