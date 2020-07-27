@@ -69,6 +69,7 @@ object CsvCreateSink extends Logging {
         case WriteMode.Create => "Creating"
         case WriteMode.Replace => "Replacing"
         case WriteMode.Truncate => "Truncating"
+        case WriteMode.Append => "Appending"
       }
 
       _ <- debug[F](log)(s"${action} '${tbl}'")
@@ -99,6 +100,9 @@ object CsvCreateSink extends Logging {
 
           case WriteMode.Truncate =>
             createTableIfNotExists(tbl, colSpecs) >> truncateTableIfExists(tbl)
+
+          case WriteMode.Append =>
+            createTableIfNotExists(tbl, colSpecs)
         }
 
       copy0 =
