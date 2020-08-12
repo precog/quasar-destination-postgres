@@ -19,15 +19,26 @@ package quasar.plugin
 import slamdata.Predef._
 
 import cats.effect.Sync
+import cats.effect.concurrent.Ref
+import cats.ApplicativeError
+import cats.data.{NonEmptyList, ValidatedNel}
+import cats.implicits._
 
 import java.net.URI
 import java.time.format.{DateTimeFormatter, DateTimeFormatterBuilder, SignStyle}
 import java.time.temporal.ChronoField
 
+import quasar.api.{Column, ColumnType}
 import quasar.api.resource._
 import quasar.connector.render.RenderConfig
 
 import scala.util.Random
+
+import doobie._
+import doobie.implicits._
+import doobie.util.log.{ExecFailure, ProcessingFailure, Success}
+
+import fs2.Chunk
 
 import org.slf4s.Logger
 
@@ -78,6 +89,37 @@ package object postgres {
   def hygienicIdent(ident: Ident): Ident =
     s""""${ident.replace("\"", "\"\"")}""""
 
+  def specifyColumnFragments[F[_]: ApplicativeError[?[_], Throwable]](
+    cols: NonEmptyList[Column[ColumnType.Scalar]])
+      : F[NonEmptyList[Fragment]] =
+    cols.traverse(columnSpec).fold(
+      invalid => ApplicativeError[F, Throwable].raiseError(new ColumnTypesNotSupported(invalid)),
+      _.pure[F])
+
+  def specifyColumnFragment[F[_]: ApplicativeError[?[_], Throwable]](
+    col: Column[ColumnType.Scalar])
+      : F[Fragment] =
+    columnSpec(col).fold(
+      invalid => ApplicativeError[F, Throwable].raiseError(new ColumnTypesNotSupported(invalid)),
+      _.pure[F])
+
+  def createTable(log: Logger)(table: Table, colSpecs: NonEmptyList[Fragment])
+      : ConnectionIO[Int] = {
+    val preamble =
+      fr"CREATE TABLE IF NOT EXISTS" ++ Fragment.const(hygienicIdent(table))
+
+    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
+      .updateWithLogHandler(logHandler(log))
+      .run
+  }
+
+  def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] =
+    ((fr"CREATE INDEX IF NOT EXISTS ON" ++
+      Fragment.const(hygienicIdent(table))) ++
+      Fragments.parentheses(col))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
   /** Returns the JDBC connection string corresponding to the given postgres URI. */
   def jdbcUri(pgUri: URI): String =
     s"jdbc:${pgUri}"
@@ -100,4 +142,47 @@ package object postgres {
 
   def trace[F[_]: Sync](log: Logger)(msg: => String): F[Unit] =
     Sync[F].delay(log.trace(msg))
+
+  def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
+    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
+  def recordChunks[F[_]: Sync](total: Ref[F, Long], log: Logger)(c: Chunk[Byte]): F[Unit] =
+    total.update(_ + c.size) >> logChunkSize[F](c, log)
+
+  def logHandler(log: Logger): LogHandler =
+    LogHandler {
+      case Success(q, _, e, p) =>
+        log.debug(s"SUCCESS: `$q` in ${(e + p).toMillis}ms (${e.toMillis} ms exec, ${p.toMillis} ms proc)")
+
+      case ExecFailure(q, _, e, t) =>
+        log.debug(s"EXECUTION_FAILURE: `$q` after ${e.toMillis} ms, detail: ${t.getMessage}", t)
+
+      case ProcessingFailure(q, _, e, p, t) =>
+        log.debug(s"PROCESSING_FAILURE: `$q` after ${(e + p).toMillis} ms (${e.toMillis} ms exec, ${p.toMillis} ms proc (failed)), detail: ${t.getMessage}", t)
+    }
+
+  def columnSpec(c: Column[ColumnType.Scalar]):
+      ValidatedNel[ColumnType.Scalar, Fragment] =
+    pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
+
+  ////
+
+  private def logChunkSize[F[_]: Sync](c: Chunk[Byte], log: Logger): F[Unit] =
+    trace[F](log)(s"Sending ${c.size} bytes")
+
+  private val pgColumnType: ColumnType.Scalar => ValidatedNel[ColumnType.Scalar, Fragment] = {
+    case ColumnType.Null => fr0"smallint".validNel
+    case ColumnType.Boolean => fr0"boolean".validNel
+    case ColumnType.LocalTime => fr0"time".validNel
+    case ColumnType.OffsetTime => fr0"time with timezone".validNel
+    case ColumnType.LocalDate => fr0"date".validNel
+    case t @ ColumnType.OffsetDate => t.invalidNel
+    case ColumnType.LocalDateTime => fr0"timestamp".validNel
+    case ColumnType.OffsetDateTime => fr0"timestamp with time zone".validNel
+    case ColumnType.Interval => fr0"interval".validNel
+    case ColumnType.Number => fr0"numeric".validNel
+    case ColumnType.String => fr0"text".validNel
+  }
 }

@@ -21,7 +21,7 @@ import slamdata.Predef._
 import cats._
 import cats.arrow.FunctionK
 import cats.data._
-import cats.effect.{Effect, ExitCase, LiftIO, Sync, Timer}
+import cats.effect.{Effect, ExitCase, LiftIO, Timer}
 import cats.effect.concurrent.Ref
 import cats.implicits._
 
@@ -29,7 +29,6 @@ import doobie._
 import doobie.implicits._
 import doobie.postgres._
 import doobie.postgres.implicits._
-import doobie.util.log.{ExecFailure, ProcessingFailure, Success}
 
 import fs2.{Chunk, Pipe, Stream}
 
@@ -81,7 +80,7 @@ object CsvCreateSink extends Logging {
       doCopy =
         data
           .chunks
-          .evalTap(recordChunks[F](totalBytes))
+          .evalTap(recordChunks[F](totalBytes, log))
           // TODO: Is there a better way?
           .translate(Effect.toIOK[F] andThen LiftIO.liftK[CopyManagerIO])
           .through(copyToTable(tbl, columns))
@@ -99,7 +98,7 @@ object CsvCreateSink extends Logging {
             dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
 
           case WriteMode.Truncate =>
-            createTableIfNotExists(tbl, colSpecs) >> truncateTableIfExists(tbl)
+            createTableIfNotExists(tbl, colSpecs) >> truncateTable(tbl)
 
           case WriteMode.Append =>
             createTableIfNotExists(tbl, colSpecs)
@@ -126,24 +125,6 @@ object CsvCreateSink extends Logging {
   }
 
   ////
-
-  private val logHandler: LogHandler =
-    LogHandler {
-      case Success(q, _, e, p) =>
-        log.debug(s"SUCCESS: `$q` in ${(e + p).toMillis}ms (${e.toMillis} ms exec, ${p.toMillis} ms proc)")
-
-      case ExecFailure(q, _, e, t) =>
-        log.debug(s"EXECUTION_FAILURE: `$q` after ${e.toMillis} ms, detail: ${t.getMessage}", t)
-
-      case ProcessingFailure(q, _, e, p, t) =>
-        log.debug(s"PROCESSING_FAILURE: `$q` after ${(e + p).toMillis} ms (${e.toMillis} ms exec, ${p.toMillis} ms proc (failed)), detail: ${t.getMessage}", t)
-    }
-
-  private def logChunkSize[F[_]: Sync](c: Chunk[Byte]): F[Unit] =
-    trace[F](log)(s"Sending ${c.size} bytes")
-
-  private def recordChunks[F[_]: Sync](total: Ref[F, Long])(c: Chunk[Byte]): F[Unit] =
-    total.update(_ + c.size) >> logChunkSize[F](c)
 
   private def copyToTable(
       table: Table,
@@ -179,43 +160,26 @@ object CsvCreateSink extends Logging {
       fr"CREATE TABLE" ++ Fragment.const(hygienicIdent(table))
 
     (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
-      .updateWithLogHandler(logHandler)
+      .updateWithLogHandler(logHandler(log))
       .run
   }
   
-    private def createTableIfNotExists(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
+  private def createTableIfNotExists(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
     val preamble =
       fr"CREATE TABLE IF NOT EXISTS" ++ Fragment.const(hygienicIdent(table))
 
     (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
-      .updateWithLogHandler(logHandler)
+      .updateWithLogHandler(logHandler(log))
       .run
   }
 
   private def dropTableIfExists(table: Table): ConnectionIO[Int] =
     (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler)
+      .updateWithLogHandler(logHandler(log))
       .run
 
-  private def truncateTableIfExists(table: Table): ConnectionIO[Int] =
+  private def truncateTable(table: Table): ConnectionIO[Int] =
     (fr"TRUNCATE" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler)
+      .updateWithLogHandler(logHandler(log))
       .run
-
-  private def columnSpec(c: Column[ColumnType.Scalar]): ValidatedNel[ColumnType.Scalar, Fragment] =
-    pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
-
-  private val pgColumnType: ColumnType.Scalar => ValidatedNel[ColumnType.Scalar, Fragment] = {
-    case ColumnType.Null => fr0"smallint".validNel
-    case ColumnType.Boolean => fr0"boolean".validNel
-    case ColumnType.LocalTime => fr0"time".validNel
-    case ColumnType.OffsetTime => fr0"time with timezone".validNel
-    case ColumnType.LocalDate => fr0"date".validNel
-    case t @ ColumnType.OffsetDate => t.invalidNel
-    case ColumnType.LocalDateTime => fr0"timestamp".validNel
-    case ColumnType.OffsetDateTime => fr0"timestamp with time zone".validNel
-    case ColumnType.Interval => fr0"interval".validNel
-    case ColumnType.Number => fr0"numeric".validNel
-    case ColumnType.String => fr0"text".validNel
-  }
 }

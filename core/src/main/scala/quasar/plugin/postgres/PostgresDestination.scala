@@ -34,5 +34,7 @@ final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     PostgresDestinationModule.destinationType
 
   val sinks: NonEmptyList[ResultSink[F, Type]] =
-    NonEmptyList.one(ResultSink.create(PostgresCsvConfig)(CsvCreateSink(xa, writeMode)))
+    NonEmptyList.of(
+      ResultSink.create(PostgresCsvConfig)(CsvCreateSink(xa, writeMode)),
+      ResultSink.upsert(PostgresCsvConfig)(CsvUpsertSink(xa, writeMode)))
 }
