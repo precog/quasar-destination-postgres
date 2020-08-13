@@ -36,7 +36,7 @@ import doobie.implicits._
 import doobie.postgres.implicits._
 import doobie.postgres.{CopyManagerIO, PFCI, PFCM, PHC}
 import doobie.util.transactor.Strategy
-import doobie.{ConnectionIO, FC, Fragment, Transactor}
+import doobie.{ConnectionIO, FC, Fragment, Fragments, Transactor}
 
 import fs2.{Chunk, Pipe, Stream}
 
@@ -83,14 +83,17 @@ object CsvUpsertSink extends Logging {
         tbl <- toConnectionIO(table)
 
         colSpecs <- toConnectionIO(specifyColumnFragments[F](columns))
-        colSpec <- toConnectionIO(specifyColumnFragment[F](args.idColumn))
+
+        indexColumn = Fragments.parentheses(Fragment.const(hygienicIdent(args.idColumn.name)))
 
         _ <- if (append) dropTableIfExists(log)(tbl) else ().pure[ConnectionIO]
 
-        _ <- createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, colSpec)
+        _ <- createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
+
+        cols = columns.map(c => hygienicIdent(c.name)).intercalate(", ")
 
         copyQuery =
-          s"COPY ${hygienicIdent(tbl)} ($columns) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
+          s"COPY ${hygienicIdent(tbl)} ($cols) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
 
         copy = PFCM.copyIn(copyQuery).bracketCase(_.pure[CopyManagerIO]) { (pgci, exitCase) =>
           PFCM.embed(pgci, exitCase match {

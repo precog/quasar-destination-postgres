@@ -21,6 +21,7 @@ import slamdata.Predef._
 import cats.ApplicativeError
 import cats.data.NonEmptyList
 import cats.effect.Async
+import cats.implicits._
 
 import com.github.tototoshi.csv._
 
@@ -33,7 +34,7 @@ import qdata.time._
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource.ResourcePath
 import quasar.api.push.OffsetKey
-import quasar.connector.DataEvent
+import quasar.connector.{IdBatch, DataEvent}
 import quasar.connector.destination.ResultSink
 import quasar.connector.render.RenderConfig
 import quasar.connector.destination.{ResultSink, WriteMode => QWriteMode}
@@ -58,6 +59,14 @@ trait CsvSupport {
       val quoting = QUOTE_MINIMAL
       val treatEmptyLineAsNil = false
     }
+
+  sealed trait UpsertEvent[+A] extends Product with Serializable
+
+  object UpsertEvent {
+    case class Create[A](records: Stream[Pure, A]) extends UpsertEvent[A]
+    case class Delete(recordsIds: List[Long]) extends UpsertEvent[Nothing]
+    case class Commit(value: String) extends UpsertEvent[Nothing]
+  }
 
   // TODO: handle includeHeader == true
   def toCsvSink[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
@@ -90,13 +99,43 @@ trait CsvSupport {
     go.stream
   }
 
-  def toUpsertCsvSink[F[_]: Async, A, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+  def columnsOf[
+    F[_]: Async, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+    events: Stream[F, UpsertEvent[R]],
+    renderRow: P,
+    idColumn: Column[ColumnType.Scalar])(
+    implicit
+    keys: Keys.Aux[R, K],
+    values: Values.Aux[R, V],
+    getTypes: Mapper.Aux[asColumnType.type, V, T],
+    ktl: ToList[K, String],
+    ttl: ToList[T, ColumnType.Scalar])
+    : Stream[F, List[Column[ColumnType.Scalar]]] = {
+    val go = events.pull.peek1 flatMap {
+      case Some((UpsertEvent.Create(records), _)) =>
+        records.pull.peek1 flatMap {
+          case Some((r, _)) => {
+            val rkeys = r.keys.toList
+            val rtypes = r.values.map(asColumnType).toList
+            val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
+
+            Pull.output1(columns.filter(c => c =!= idColumn))
+          }
+          case _ => Pull.done
+        }
+      case _ => Pull.done
+    }
+
+    go.stream
+  }
+
+  def toUpsertCsvSink[F[_]: Async, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       dst: ResourcePath,
       sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
       idColumn: Column[ColumnType.Scalar],
       writeMode: QWriteMode,
       renderRow: P,
-      records: Stream[F, R])(
+      events: Stream[F, UpsertEvent[R]])(
       implicit
       keys: Keys.Aux[R, K],
       values: Values.Aux[R, V],
@@ -105,27 +144,30 @@ trait CsvSupport {
       ktl: ToList[K, String],
       stl: ToList[S, String],
       ttl: ToList[T, ColumnType.Scalar])
-      : Stream[F, OffsetKey.Actual[A]] = {
+      : Stream[F, OffsetKey.Actual[String]] = {
 
-    val go = records.pull.peek1 flatMap {
-      case Some((r, rs)) =>
-        val rkeys = r.keys.toList
-        val rtypes = r.values.map(asColumnType).toList
-        val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
+    val encoded: Stream[F, DataEvent[OffsetKey.Actual[String]]] = events flatMap {
+      case UpsertEvent.Create(records) => {
+        records
+          .covary[F]
+          .through(
+            encodeCsvRecordsToChunk[F, renderRow.type, R, V, S](renderRow))
+          .map(DataEvent.Create)
+      }
 
-        val toChunk: Stream[F, R] => F[Chunk[Byte]] =
-          encodeCsvRecordsToChunk[F, renderRow.type, R, V, S](renderRow)
+      case UpsertEvent.Commit(s) =>
+        Stream(
+          DataEvent.Commit(OffsetKey.Actual.string(s)))
 
-        val encoded = Stream.eval(toChunk(rs)).map[DataEvent[OffsetKey.Actual[A]]](DataEvent.Create)
-
-        val args = ResultSink.UpsertSink.Args(dst, idColumn, columns, writeMode, encoded)
-
-        sink.consume.apply(args).pull.echo
-
-      case None => Pull.done
+      case UpsertEvent.Delete(is) =>
+        Stream(
+          DataEvent.Delete(IdBatch.Longs(is.toArray, is.length)))
     }
 
-    go.stream
+    columnsOf(events, renderRow, idColumn).flatMap(cols =>
+      sink.consume.apply(
+        ResultSink.UpsertSink.Args(
+          dst, idColumn, cols, writeMode, encoded)))
   }
 
   def encodeCsvRecordsToChunk[F[_]: Async, P <: Poly1, R <: HList, V <: HList, S <: HList](
@@ -134,8 +176,9 @@ trait CsvSupport {
       values: Values.Aux[R, V],
       render: Mapper.Aux[renderRow.type, V, S],
       ltl: ToList[S, String])
-      : Stream[F, R] => F[Chunk[Byte]] =
-    _.map(_.values.map(renderRow).toList).through(encodeCsvRows[F]).compile.to(Chunk)
+      : Pipe[F, R, Chunk[Byte]] =
+    encodeCsvRecords[F, P, R, V, S](renderRow).andThen(bytes =>
+      bytes.chunks.fold(Chunk.empty[Byte])((l, r) => Chunk.concatBytes(Seq(l, r))))
 
   def encodeCsvRecords[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, V <: HList, S <: HList](
       renderRow: P)(
@@ -198,7 +241,8 @@ trait CsvSupport {
 
   ////
 
-  private def encodeCsvRows[F[_]](implicit F: ApplicativeError[F, Throwable]): Pipe[F, Seq[String], Byte] =
+  private def encodeCsvRows[F[_]](implicit F: ApplicativeError[F, Throwable])
+      : Pipe[F, Seq[String], Byte] =
     in => Stream.suspend {
       val os = new ByteArrayOutputStream
       val csvWriter = CSVWriter.open(os, "UTF-8")(QuasarCSVFormat)

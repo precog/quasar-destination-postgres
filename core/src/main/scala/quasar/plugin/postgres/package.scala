@@ -114,7 +114,7 @@ package object postgres {
   }
 
   def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] =
-    ((fr"CREATE INDEX IF NOT EXISTS ON" ++
+    ((fr"CREATE INDEX IF NOT EXISTS __precog_ix__ ON" ++
       Fragment.const(hygienicIdent(table))) ++
       Fragments.parentheses(col))
       .updateWithLogHandler(logHandler(log))

@@ -41,10 +41,11 @@ import qdata.time._
 import quasar.EffectfulQSpec
 import quasar.api.{Column, ColumnType}
 import quasar.api.destination._
+import quasar.api.push.OffsetKey
 import quasar.api.resource._
 import quasar.contrib.scalaz.MonadError_
 import quasar.connector._
-import quasar.connector.destination._
+import quasar.connector.destination.{WriteMode => QWriteMode, _}
 import quasar.connector.render.RenderConfig
 
 import scala.Float
@@ -88,6 +89,32 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         case _ => ko("Expected a connection failed")
       }))
+    }
+  }
+
+  "csv upsert sink" should {
+    "write after commit" >>* {
+      upsertCsv(config()) { sink =>
+        val recs = List(
+          ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
+          ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)
+
+        val events =
+          Stream(
+            UpsertEvent.Create(Stream.emits(recs)),
+            UpsertEvent.Commit("commit1"))
+
+        for {
+          tbl <- freshTableName
+          _ <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tbl,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Append,
+            events)
+        } yield ok
+      }
     }
   }
 
@@ -317,8 +344,80 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           .getOrElse(IO.raiseError(new RuntimeException("No CSV sink found!")))
     }
 
+  def upsertCsv[A](cfg: Json)(f: ResultSink.UpsertSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
+    dest(cfg) {
+      case Left(err) =>
+        IO.raiseError(new RuntimeException(err.shows))
+
+      case Right(dst) =>
+        dst.sinks.toList
+          .collectFirst { case c @ ResultSink.UpsertSink(_: RenderConfig.Csv, _) => c }
+          .map(s => f(s.asInstanceOf[ResultSink.UpsertSink[IO, ColumnType.Scalar]]))
+          .getOrElse(IO.raiseError(new RuntimeException("No upsert CSV sink found!")))
+    }
+
   def dest[A](cfg: Json)(f: Either[DM.InitErr, Destination[IO]] => IO[A]): IO[A] =
     DM.destination[IO](cfg, _ => _ => Stream.empty).use(f)
+
+  def upsertDrainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+      connectionUri: String,
+      table: Table,
+      sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
+      idColumn: Column[ColumnType.Scalar],
+      writeMode: QWriteMode,
+      records: Stream[F, UpsertEvent[R]])(
+      implicit
+      keys: Keys.Aux[R, K],
+      values: Values.Aux[R, V],
+      read: Read[V],
+      getTypes: Mapper.Aux[asColumnType.type, V, T],
+      rrow: Mapper.Aux[renderRow.type, V, S],
+      ktl: ToList[K, String],
+      vtl: ToList[S, String],
+      ttl: ToList[T, ColumnType.Scalar])
+      : F[(List[V], List[OffsetKey.Actual[String]])] =
+    upsertDrainAndSelectAs[F, V](connectionUri, table, sink, idColumn, writeMode, records)
+
+  object upsertDrainAndSelectAs {
+    def apply[F[_], A]: PartiallyApplied[F, A] =
+      new PartiallyApplied[F, A]
+
+    final class PartiallyApplied[F[_], A]() {
+      def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+          connectionUri: String,
+          table: Table,
+          sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
+          idColumn: Column[ColumnType.Scalar],
+          writeMode: QWriteMode,
+          records: Stream[F, UpsertEvent[R]])(
+          implicit
+          async: Async[F],
+          cshift: ContextShift[F],
+          read: Read[A],
+          keys: Keys.Aux[R, K],
+          values: Values.Aux[R, V],
+          getTypes: Mapper.Aux[asColumnType.type, V, T],
+          rrow: Mapper.Aux[renderRow.type, V, S],
+          ktl: ToList[K, String],
+          vtl: ToList[S, String],
+          ttl: ToList[T, ColumnType.Scalar])
+          : F[(List[A], List[OffsetKey.Actual[String]])] =
+        for {
+          tableColumns <- columnsOf(records, renderRow, idColumn).compile.lastOrError
+
+          colList = tableColumns.map(k => Fragment.const(hygienicIdent(k.name))).intercalate(fr",")
+
+          dst = ResourcePath.root() / ResourceName(table)
+
+          offsets <- toUpsertCsvSink(dst, sink, idColumn, writeMode, renderRow, records).compile.toList
+
+          q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
+
+          rows <- runDb[F, List[A]](q.query[A].to[List], connectionUri)
+
+        } yield (rows, offsets)
+    }
+  }
 
   def drainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       connectionUri: String,
