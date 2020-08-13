@@ -20,6 +20,7 @@ import slamdata.Predef._
 
 import cats.ApplicativeError
 import cats.data.NonEmptyList
+import cats.effect.Async
 
 import com.github.tototoshi.csv._
 
@@ -31,8 +32,11 @@ import java.time._
 import qdata.time._
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource.ResourcePath
+import quasar.api.push.OffsetKey
+import quasar.connector.DataEvent
 import quasar.connector.destination.ResultSink
 import quasar.connector.render.RenderConfig
+import quasar.connector.destination.{ResultSink, WriteMode => QWriteMode}
 
 import scala.Float
 import scala.collection.immutable.Seq
@@ -85,6 +89,53 @@ trait CsvSupport {
 
     go.stream
   }
+
+  def toUpsertCsvSink[F[_]: Async, A, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+      dst: ResourcePath,
+      sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
+      idColumn: Column[ColumnType.Scalar],
+      writeMode: QWriteMode,
+      renderRow: P,
+      records: Stream[F, R])(
+      implicit
+      keys: Keys.Aux[R, K],
+      values: Values.Aux[R, V],
+      getTypes: Mapper.Aux[asColumnType.type, V, T],
+      renderValues: Mapper.Aux[renderRow.type, V, S],
+      ktl: ToList[K, String],
+      stl: ToList[S, String],
+      ttl: ToList[T, ColumnType.Scalar])
+      : Stream[F, OffsetKey.Actual[A]] = {
+
+    val go = records.pull.peek1 flatMap {
+      case Some((r, rs)) =>
+        val rkeys = r.keys.toList
+        val rtypes = r.values.map(asColumnType).toList
+        val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
+
+        val toChunk: Stream[F, R] => F[Chunk[Byte]] =
+          encodeCsvRecordsToChunk[F, renderRow.type, R, V, S](renderRow)
+
+        val encoded = Stream.eval(toChunk(rs)).map[DataEvent[OffsetKey.Actual[A]]](DataEvent.Create)
+
+        val args = ResultSink.UpsertSink.Args(dst, idColumn, columns, writeMode, encoded)
+
+        sink.consume.apply(args).pull.echo
+
+      case None => Pull.done
+    }
+
+    go.stream
+  }
+
+  def encodeCsvRecordsToChunk[F[_]: Async, P <: Poly1, R <: HList, V <: HList, S <: HList](
+      renderRow: P)(
+      implicit
+      values: Values.Aux[R, V],
+      render: Mapper.Aux[renderRow.type, V, S],
+      ltl: ToList[S, String])
+      : Stream[F, R] => F[Chunk[Byte]] =
+    _.map(_.values.map(renderRow).toList).through(encodeCsvRows[F]).compile.to(Chunk)
 
   def encodeCsvRecords[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, V <: HList, S <: HList](
       renderRow: P)(
