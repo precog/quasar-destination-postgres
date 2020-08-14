@@ -235,6 +235,41 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         }
       }
     }
+
+    "delete same id twice" >>* {
+      upsertCsv(config()) { sink =>
+        val events =
+          Stream(
+            UpsertEvent.Create(
+              Stream(
+                ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
+                ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
+            UpsertEvent.Commit("commit1"),
+            UpsertEvent.Delete(List("foo")),
+            UpsertEvent.Commit("commit2"),
+            UpsertEvent.Delete(List("foo")),
+            UpsertEvent.Commit("commit3"))
+
+        for {
+          tbl <- freshTableName
+          (values, offsets) <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tbl,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Append,
+            events)
+        } yield {
+          values must_== List("baz" :: "qux" :: HNil)
+
+          offsets must_== List(
+            OffsetKey.Actual.string("commit1"),
+            OffsetKey.Actual.string("commit2"),
+            OffsetKey.Actual.string("commit3"))
+        }
+      }
+
+    }
   }
 
   "csv sink" should {
@@ -524,11 +559,13 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         for {
           tableColumns <- columnsOf(records, renderRow, idColumn).compile.lastOrError
 
-          colList = (idColumn :: tableColumns).map(k => Fragment.const(hygienicIdent(k.name))).intercalate(fr",")
+          colList = (idColumn :: tableColumns).map(k =>
+            Fragment.const(hygienicIdent(k.name))).intercalate(fr",")
 
           dst = ResourcePath.root() / ResourceName(table)
 
-          offsets <- toUpsertCsvSink(dst, sink, idColumn, writeMode, renderRow, records).compile.toList
+          offsets <- toUpsertCsvSink(
+            dst, sink, idColumn, writeMode, renderRow, records).compile.toList
 
           q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
 

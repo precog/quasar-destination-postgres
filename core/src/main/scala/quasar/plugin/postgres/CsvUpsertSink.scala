@@ -97,8 +97,8 @@ object CsvUpsertSink extends Logging {
 
         data = records.toBytes
 
-        copied = PFCM.copyIn(copyQuery).bracketCase(PFCM.embed(_, PFCI.writeToCopy(data.values, data.offset, data.length))) { (pgci, exitCase) =>
-
+        copied = PFCM.copyIn(copyQuery).bracketCase(
+          PFCM.embed(_, PFCI.writeToCopy(data.values, data.offset, data.length))) { (pgci, exitCase) =>
           PFCM.embed(pgci, exitCase match {
             case ExitCase.Completed => PFCI.endCopy.void
             case _ => PFCI.isActive.ifM(PFCI.cancelCopy, PFCI.unit)
