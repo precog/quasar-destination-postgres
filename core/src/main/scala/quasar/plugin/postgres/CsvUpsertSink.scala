@@ -28,13 +28,13 @@ import org.slf4s.Logging
 import cats.data.{NonEmptyList, NonEmptyVector}
 import cats.effect.concurrent.Ref
 import cats.effect.syntax.bracket._
-import cats.effect.{Async, Effect, ExitCase, LiftIO, Timer}
+import cats.effect.{Effect, ExitCase, LiftIO, Timer}
 import cats.implicits._
 
 import doobie.free.connection.{rollback, setAutoCommit, unit}
 import doobie.implicits._
 import doobie.postgres.implicits._
-import doobie.postgres.{CopyManagerIO, CopyInIO, PFCI, PFCM, PHC}
+import doobie.postgres.{PFCI, PFCM, PHC}
 import doobie.util.transactor.Strategy
 import doobie.{ConnectionIO, FC, Fragment, Fragments, Transactor}
 
@@ -157,11 +157,7 @@ object CsvUpsertSink extends Logging {
         fr"DELETE FROM" ++ Fragment.const(hygienicIdent(table)) ++ fr"WHERE" ++ col
 
       val set = values.intercalate(fr",")
-      val condition = fr"IN" ++ fr0"(" ++ set ++ fr0")"
-
-      val deleteQuery = preamble ++ condition
-
-      println(deleteQuery)
+      val condition = fr"IN" ++ fr0"(" ++ set ++ fr0")" // Use Fragment.in
 
       (preamble ++ condition)
         .updateWithLogHandler(logHandler(log))

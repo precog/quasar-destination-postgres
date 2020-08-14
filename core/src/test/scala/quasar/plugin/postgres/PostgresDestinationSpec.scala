@@ -202,6 +202,39 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         }
       }
     }
+
+    "empty deletes without failing" >>* {
+      upsertCsv(config()) { sink =>
+        val events =
+          Stream(
+            UpsertEvent.Create(
+              Stream(
+                ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
+                ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
+            UpsertEvent.Commit("commit1"),
+            UpsertEvent.Delete(List()),
+            UpsertEvent.Commit("commit2"))
+
+        for {
+          tbl <- freshTableName
+          (values, offsets) <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tbl,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Append,
+            events)
+        } yield {
+          values must_== List(
+            "foo" :: "bar" :: HNil,
+            "baz" :: "qux" :: HNil)
+
+          offsets must_== List(
+            OffsetKey.Actual.string("commit1"),
+            OffsetKey.Actual.string("commit2"))
+        }
+      }
+    }
   }
 
   "csv sink" should {
