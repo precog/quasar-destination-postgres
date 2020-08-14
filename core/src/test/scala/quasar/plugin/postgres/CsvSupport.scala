@@ -64,7 +64,7 @@ trait CsvSupport {
 
   object UpsertEvent {
     case class Create[A](records: Stream[Pure, A]) extends UpsertEvent[A]
-    case class Delete(recordsIds: List[Long]) extends UpsertEvent[Nothing]
+    case class Delete(recordsIds: List[String]) extends UpsertEvent[Nothing]
     case class Commit(value: String) extends UpsertEvent[Nothing]
   }
 
@@ -161,7 +161,7 @@ trait CsvSupport {
 
       case UpsertEvent.Delete(is) =>
         Stream(
-          DataEvent.Delete(IdBatch.Longs(is.toArray, is.length)))
+          DataEvent.Delete(IdBatch.Strings(is.toArray, is.length)))
     }
 
     columnsOf(events, renderRow, idColumn).flatMap(cols =>

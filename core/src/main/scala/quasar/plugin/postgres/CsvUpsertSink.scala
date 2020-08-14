@@ -28,13 +28,13 @@ import org.slf4s.Logging
 import cats.data.{NonEmptyList, NonEmptyVector}
 import cats.effect.concurrent.Ref
 import cats.effect.syntax.bracket._
-import cats.effect.{Effect, ExitCase, LiftIO, Timer}
+import cats.effect.{Async, Effect, ExitCase, LiftIO, Timer}
 import cats.implicits._
 
 import doobie.free.connection.{rollback, setAutoCommit, unit}
 import doobie.implicits._
 import doobie.postgres.implicits._
-import doobie.postgres.{CopyManagerIO, PFCI, PFCM, PHC}
+import doobie.postgres.{CopyManagerIO, CopyInIO, PFCI, PFCM, PHC}
 import doobie.util.transactor.Strategy
 import doobie.{ConnectionIO, FC, Fragment, Fragments, Transactor}
 
@@ -95,17 +95,15 @@ object CsvUpsertSink extends Logging {
         copyQuery =
           s"COPY ${hygienicIdent(tbl)} ($cols) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
 
-        copy = PFCM.copyIn(copyQuery).bracketCase(_.pure[CopyManagerIO]) { (pgci, exitCase) =>
+        data = records.toBytes
+
+        copied = PFCM.copyIn(copyQuery).bracketCase(PFCM.embed(_, PFCI.writeToCopy(data.values, data.offset, data.length))) { (pgci, exitCase) =>
+
           PFCM.embed(pgci, exitCase match {
             case ExitCase.Completed => PFCI.endCopy.void
             case _ => PFCI.isActive.ifM(PFCI.cancelCopy, PFCI.unit)
           })
         }
-
-        data = records.toBytes
-
-        copied = copy.flatMap(pgci =>
-          PFCM.embed(pgci, PFCI.writeToCopy(data.values, data.offset, data.length)))
 
         back <- PHC.pgGetCopyAPI(copied)
 
@@ -122,27 +120,27 @@ object CsvUpsertSink extends Logging {
             case IdBatch.Strings(values, _) =>
               NonEmptyVector
                 .fromVectorUnsafe(values.toVector) // trust the size passed from quasar
-                .map(str => Fragment.const(str.show)) // prevent injection here
+                .map(str => singleQuoted(str.show)) // TODO: prevent injection heru
 
             case IdBatch.Longs(values, _) =>
               NonEmptyVector
                 .fromVectorUnsafe(values.toVector)
-                .map(l => Fragment.const(l.show))
+                .map(l => singleQuoted(l.show))
 
             case IdBatch.Doubles(values, _) =>
               NonEmptyVector
                 .fromVectorUnsafe(values.toVector)
-                .map(d => Fragment.const(d.show))
+                .map(d => singleQuoted(d.show))
 
             case IdBatch.BigDecimals(values, _) =>
               NonEmptyVector
                 .fromVectorUnsafe(values.toVector)
-                .map(bd => Fragment.const(bd.show))
+                .map(bd => singleQuoted(bd.show))
           }
 
         for {
           tbl <- toConnectionIO(table)
-          colSpec <- toConnectionIO(specifyColumnFragment[F](args.idColumn))
+          colSpec = Fragment.const(hygienicIdent(args.idColumn.name))
           _ <- deleteFrom(tbl, colSpec, values)
         } yield ()
       }
@@ -150,13 +148,20 @@ object CsvUpsertSink extends Logging {
     def handleCommit(offset: OffsetKey.Actual[I]): ConnectionIO[OffsetKey.Actual[I]] =
       FC.commit.as(offset)
 
+    def singleQuoted(str: String): Fragment =
+      fr0"'" ++ Fragment.const0(str) ++ fr0"'"
+
     def deleteFrom(table: Table, col: Fragment, values: NonEmptyVector[Fragment])
         : ConnectionIO[Int] = {
       val preamble =
-        fr"DELETE FROM" ++ Fragment.const(hygienicIdent(table)) ++ fr"WHERE"
+        fr"DELETE FROM" ++ Fragment.const(hygienicIdent(table)) ++ fr"WHERE" ++ col
 
       val set = values.intercalate(fr",")
       val condition = fr"IN" ++ fr0"(" ++ set ++ fr0")"
+
+      val deleteQuery = preamble ++ condition
+
+      println(deleteQuery)
 
       (preamble ++ condition)
         .updateWithLogHandler(logHandler(log))
