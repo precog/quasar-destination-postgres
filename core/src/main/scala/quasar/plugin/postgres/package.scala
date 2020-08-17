@@ -113,12 +113,32 @@ package object postgres {
       .run
   }
 
+  def createTableIfNotExists(log: Logger)(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
+    val preamble =
+      fr"CREATE TABLE IF NOT EXISTS" ++ Fragment.const(hygienicIdent(table))
+
+    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
+      .updateWithLogHandler(logHandler(log))
+      .run
+  }
+
   def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] =
     ((fr"CREATE INDEX IF NOT EXISTS __precog_ix__ ON" ++
       Fragment.const(hygienicIdent(table))) ++
       Fragments.parentheses(col))
       .updateWithLogHandler(logHandler(log))
       .run
+
+  def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
+    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
+  def truncateTable(log: Logger)(table: Table): ConnectionIO[Int] =
+    (fr"TRUNCATE" ++ Fragment.const(hygienicIdent(table)))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
 
   /** Returns the JDBC connection string corresponding to the given postgres URI. */
   def jdbcUri(pgUri: URI): String =
@@ -134,6 +154,9 @@ package object postgres {
       case table /: ResourcePath.Root => table
     }
 
+  def recordChunks[F[_]: Sync](total: Ref[F, Long], log: Logger)(c: Chunk[Byte]): F[Unit] =
+    total.update(_ + c.size) >> logChunkSize[F](c, log)
+
   def error[F[_]: Sync](log: Logger)(msg: => String, cause: => Throwable): F[Unit] =
     Sync[F].delay(log.error(msg, cause))
 
@@ -142,14 +165,6 @@ package object postgres {
 
   def trace[F[_]: Sync](log: Logger)(msg: => String): F[Unit] =
     Sync[F].delay(log.trace(msg))
-
-  def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
-    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler(log))
-      .run
-
-  def recordChunks[F[_]: Sync](total: Ref[F, Long], log: Logger)(c: Chunk[Byte]): F[Unit] =
-    total.update(_ + c.size) >> logChunkSize[F](c, log)
 
   def logHandler(log: Logger): LogHandler =
     LogHandler {

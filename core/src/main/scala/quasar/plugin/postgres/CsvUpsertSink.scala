@@ -21,6 +21,7 @@ import slamdata.Predef._
 import quasar.api.push.OffsetKey
 import quasar.api.{Column, ColumnType}
 import quasar.connector.destination.ResultSink.UpsertSink
+import quasar.connector.destination.{WriteMode => QWriteMode}
 import quasar.connector.{DataEvent, IdBatch, MonadResourceErr, ResourceError}
 
 import org.slf4s.Logging
@@ -52,11 +53,13 @@ object CsvUpsertSink extends Logging {
     val strategy = Strategy(setAutoCommit(false), unit, rollback, unit)
     val xa = Transactor.strategy.modify(xa0, _ => strategy)
 
-    Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α] => Stream[F, OffsetKey.Actual[α]]]](run(xa))
+    Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α] => Stream[F, OffsetKey.Actual[α]]]](
+      run(xa, writeMode))
   }
 
   def run[F[_]: Effect: MonadResourceErr, I](
-    xa: Transactor[F])(
+    xa: Transactor[F],
+    writeMode: WriteMode)(
     args: UpsertSink.Args[F, ColumnType.Scalar, I])(
     implicit timer: Timer[F])
       : Stream[F, OffsetKey.Actual[I]] = {
@@ -65,8 +68,6 @@ object CsvUpsertSink extends Logging {
       NonEmptyList(args.idColumn, args.otherColumns)
 
     val toConnectionIO = Effect.toIOK[F] andThen LiftIO.liftK[ConnectionIO]
-
-    val append = false
 
     val table: F[Table] =
       tableFromPath(args.path) match {
@@ -86,9 +87,18 @@ object CsvUpsertSink extends Logging {
 
         indexColumn = Fragments.parentheses(Fragment.const(hygienicIdent(args.idColumn.name)))
 
-        _ <- if (append) dropTableIfExists(log)(tbl) else ().pure[ConnectionIO]
-
-        _ <- createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
+        _ <- (args.writeMode, writeMode) match {
+          case (QWriteMode.Replace, WriteMode.Create) =>
+            createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
+          case (QWriteMode.Replace, WriteMode.Replace) =>
+            dropTableIfExists(log)(tbl) >> createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
+          case (QWriteMode.Replace, WriteMode.Truncate) =>
+            createTableIfNotExists(log)(tbl, colSpecs) >> truncateTable(log)(tbl) >> createIndex(log)(tbl, indexColumn)
+          case (QWriteMode.Replace, WriteMode.Append) =>
+            createTableIfNotExists(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
+          case (QWriteMode.Append, _) =>
+            ().pure[ConnectionIO]
+        }
 
         cols = columns.map(c => hygienicIdent(c.name)).intercalate(", ")
 

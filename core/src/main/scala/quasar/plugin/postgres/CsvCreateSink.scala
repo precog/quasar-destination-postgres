@@ -92,16 +92,16 @@ object CsvCreateSink extends Logging {
       ensureTable =
         writeMode match {
           case WriteMode.Create =>
-            createTable(tbl, colSpecs)
+            createTable(log)(tbl, colSpecs)
 
           case WriteMode.Replace =>
-            dropTableIfExists(tbl) >> createTable(tbl, colSpecs)
+            dropTableIfExists(log)(tbl) >> createTable(log)(tbl, colSpecs)
 
           case WriteMode.Truncate =>
-            createTableIfNotExists(tbl, colSpecs) >> truncateTable(tbl)
+            createTableIfNotExists(log)(tbl, colSpecs) >> truncateTable(log)(tbl)
 
           case WriteMode.Append =>
-            createTableIfNotExists(tbl, colSpecs)
+            createTableIfNotExists(log)(tbl, colSpecs)
         }
 
       copy0 =
@@ -154,32 +154,4 @@ object CsvCreateSink extends Logging {
       }
     }
   }
-
-  private def createTable(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
-    val preamble =
-      fr"CREATE TABLE" ++ Fragment.const(hygienicIdent(table))
-
-    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
-      .updateWithLogHandler(logHandler(log))
-      .run
-  }
-  
-  private def createTableIfNotExists(table: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Int] = {
-    val preamble =
-      fr"CREATE TABLE IF NOT EXISTS" ++ Fragment.const(hygienicIdent(table))
-
-    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
-      .updateWithLogHandler(logHandler(log))
-      .run
-  }
-
-  private def dropTableIfExists(table: Table): ConnectionIO[Int] =
-    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler(log))
-      .run
-
-  private def truncateTable(table: Table): ConnectionIO[Int] =
-    (fr"TRUNCATE" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler(log))
-      .run
 }

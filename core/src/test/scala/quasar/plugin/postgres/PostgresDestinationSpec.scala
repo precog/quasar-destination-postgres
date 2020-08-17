@@ -111,7 +111,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             tbl,
             sink,
             Column("x", ColumnType.String),
-            QWriteMode.Append,
+            QWriteMode.Replace,
             events)
         } yield {
           values must_== List(
@@ -138,7 +138,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             tbl,
             sink,
             Column("x", ColumnType.String),
-            QWriteMode.Append,
+            QWriteMode.Replace,
             events)
         } yield {
           values must_== List("foo" :: "bar" :: HNil)
@@ -162,7 +162,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             tbl,
             sink,
             Column("x", ColumnType.String),
-            QWriteMode.Append,
+            QWriteMode.Replace,
             events)
         } yield {
           values must_== List("foo" :: "bar" :: HNil)
@@ -192,7 +192,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             tbl,
             sink,
             Column("x", ColumnType.String),
-            QWriteMode.Append,
+            QWriteMode.Replace,
             events)
         } yield {
           values must_== List("baz" :: "qux" :: HNil)
@@ -222,7 +222,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             tbl,
             sink,
             Column("x", ColumnType.Number),
-            QWriteMode.Append,
+            QWriteMode.Replace,
             events)
         } yield {
           values must_== List(42 :: "qux" :: HNil)
@@ -252,7 +252,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             tbl,
             sink,
             Column("x", ColumnType.String),
-            QWriteMode.Append,
+            QWriteMode.Replace,
             events)
         } yield {
           values must_== List(
@@ -287,7 +287,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             tbl,
             sink,
             Column("x", ColumnType.String),
-            QWriteMode.Append,
+            QWriteMode.Replace,
             events)
         } yield {
           values must_== List("baz" :: "qux" :: HNil)
@@ -296,6 +296,44 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             OffsetKey.Actual.string("commit1"),
             OffsetKey.Actual.string("commit2"),
             OffsetKey.Actual.string("commit3"))
+        }
+      }
+    }
+
+    "creates table and then appends" >>* {
+      upsertCsv(config()) { sink =>
+        val events1 =
+          Stream(
+            UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+            UpsertEvent.Commit("commit1"))
+
+        val events2 =
+          Stream(
+            UpsertEvent.Create(List(("x" ->> "bar") :: ("y" ->> "qux") :: HNil)),
+            UpsertEvent.Commit("commit2"))
+
+        for {
+          tbl <- freshTableName
+
+          _ <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tbl,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Replace,
+            events1)
+
+          (values, _) <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tbl,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Append,
+            events2)
+        } yield {
+          values must_== List(
+            "foo" :: "bar" :: HNil,
+            "bar" :: "qux" :: HNil)
         }
       }
     }
