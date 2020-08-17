@@ -173,7 +173,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
-    "deletes rows" >>* {
+    "delete rows with string primary key" >>* {
       upsertCsv(config()) { sink =>
         val events =
           Stream(

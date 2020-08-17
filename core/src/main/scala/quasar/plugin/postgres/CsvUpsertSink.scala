@@ -115,54 +115,42 @@ object CsvUpsertSink extends Logging {
       if (recordIds.size === 0) {
         ().pure[ConnectionIO]
       } else {
-        val values: NonEmptyVector[Fragment] =
+
+        def preambleFragment(tbl: Table): Fragment =
+          fr"DELETE FROM" ++
+            Fragment.const(hygienicIdent(tbl)) ++
+            fr"WHERE" ++
+            Fragment.const(hygienicIdent(args.idColumn.name))
+
+        def deleteFrom(preamble: Fragment, table: Table): ConnectionIO[Int] =
           recordIds match {
             case IdBatch.Strings(values, _) =>
-              NonEmptyVector
-                .fromVectorUnsafe(values.toVector) // trust the size passed from quasar
-                .map(str => singleQuoted(str.show)) // TODO: prevent injection heru
-
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector)) // trust size passed by quasar
+                .updateWithLogHandler(logHandler(log))
+                .run
             case IdBatch.Longs(values, _) =>
-              NonEmptyVector
-                .fromVectorUnsafe(values.toVector)
-                .map(l => singleQuoted(l.show))
-
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector))
+                .updateWithLogHandler(logHandler(log))
+                .run
             case IdBatch.Doubles(values, _) =>
-              NonEmptyVector
-                .fromVectorUnsafe(values.toVector)
-                .map(d => singleQuoted(d.show))
-
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector))
+                .updateWithLogHandler(logHandler(log))
+                .run
             case IdBatch.BigDecimals(values, _) =>
-              NonEmptyVector
-                .fromVectorUnsafe(values.toVector)
-                .map(bd => singleQuoted(bd.show))
-          }
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector))
+                .updateWithLogHandler(logHandler(log))
+                .run
+        }
 
         for {
           tbl <- toConnectionIO(table)
-          colSpec = Fragment.const(hygienicIdent(args.idColumn.name))
-          _ <- deleteFrom(tbl, colSpec, values)
+          preamble = preambleFragment(tbl)
+          _ <- deleteFrom(preamble, tbl)
         } yield ()
       }
 
     def handleCommit(offset: OffsetKey.Actual[I]): ConnectionIO[OffsetKey.Actual[I]] =
       FC.commit.as(offset)
-
-    def singleQuoted(str: String): Fragment =
-      fr0"'" ++ Fragment.const0(str) ++ fr0"'"
-
-    def deleteFrom(table: Table, col: Fragment, values: NonEmptyVector[Fragment])
-        : ConnectionIO[Int] = {
-      val preamble =
-        fr"DELETE FROM" ++ Fragment.const(hygienicIdent(table)) ++ fr"WHERE" ++ col
-
-      val set = values.intercalate(fr",")
-      val condition = fr"IN" ++ fr0"(" ++ set ++ fr0")" // Use Fragment.in
-
-      (preamble ++ condition)
-        .updateWithLogHandler(logHandler(log))
-        .run
-    }
 
     def eventHandler(totalBytes: Ref[F, Long])
         : Pipe[ConnectionIO, DataEvent[OffsetKey.Actual[I]], Option[OffsetKey.Actual[I]]] =
@@ -176,8 +164,7 @@ object CsvUpsertSink extends Logging {
       }
 
     Stream.eval(Ref[F].of(0L)) flatMap { tb =>
-      val translated: Stream[ConnectionIO, DataEvent[OffsetKey.Actual[I]]] =
-        args.input.translate(toConnectionIO)
+      val translated = args.input.translate(toConnectionIO)
 
       eventHandler(tb)(translated).unNone.transact(xa)
     }
