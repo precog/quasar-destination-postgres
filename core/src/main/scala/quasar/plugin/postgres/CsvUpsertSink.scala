@@ -41,6 +41,8 @@ import doobie.{ConnectionIO, FC, Fragment, Fragments, Transactor}
 
 import fs2.{Chunk, Pipe, Stream}
 
+import scala.concurrent.duration.MILLISECONDS
+
 import skolems.Forall
 
 object CsvUpsertSink extends Logging {
@@ -173,10 +175,22 @@ object CsvUpsertSink extends Logging {
           handleCommit(offset).map(_.some)
       }
 
-    Stream.eval(Ref[F].of(0L)) flatMap { tb =>
-      val translated = args.input.translate(toConnectionIO)
+    def logEnd(startAt: Long, bytes: Ref[F, Long]): F[Unit] =
+      for {
+        endAt <- timer.clock.monotonic(MILLISECONDS)
+        tbl <- table
+        tbytes <- bytes.get
+        _ <- debug[F](log)(s"SUCCESS: COPY ${tbytes} bytes to '${tbl}' in ${endAt - startAt} ms")
+      } yield ()
 
-      eventHandler(tb)(translated).unNone.transact(xa)
-    }
+
+    Stream.force(
+      for {
+        byteCounter <- Ref[F].of(0L)
+        startAt <- timer.clock.monotonic(MILLISECONDS)
+        logEnd0 = logEnd(startAt, byteCounter)
+        translated = args.input.translate(toConnectionIO)
+        events = eventHandler(byteCounter)(translated).unNone.transact(xa) ++ Stream.eval(logEnd0).drain
+      } yield events)
   }
 }
