@@ -61,10 +61,16 @@ trait CsvSupport {
     }
 
   sealed trait UpsertEvent[+A] extends Product with Serializable
+  sealed trait Ids extends Product with Serializable
+
+  object Ids {
+    case class StringIds(ids: List[String]) extends Ids
+    case class LongIds(ids: List[Long]) extends Ids
+  }
 
   object UpsertEvent {
-    case class Create[A](records: Stream[Pure, A]) extends UpsertEvent[A]
-    case class Delete(recordsIds: List[String]) extends UpsertEvent[Nothing]
+    case class Create[A](records: List[A]) extends UpsertEvent[A]
+    case class Delete(recordsIds: Ids) extends UpsertEvent[Nothing]
     case class Commit(value: String) extends UpsertEvent[Nothing]
   }
 
@@ -113,16 +119,18 @@ trait CsvSupport {
     : Stream[F, List[Column[ColumnType.Scalar]]] = {
     val go = events.pull.peek1 flatMap {
       case Some((UpsertEvent.Create(records), _)) =>
-        records.pull.peek1 flatMap {
-          case Some((r, _)) => {
+        records.headOption match {
+          case Some(r) =>
             val rkeys = r.keys.toList
             val rtypes = r.values.map(asColumnType).toList
+
             val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
 
             Pull.output1(columns.filter(c => c =!= idColumn))
-          }
+
           case _ => Pull.done
         }
+
       case _ => Pull.done
     }
 
@@ -148,7 +156,7 @@ trait CsvSupport {
 
     val encoded: Stream[F, DataEvent[OffsetKey.Actual[String]]] = events flatMap {
       case UpsertEvent.Create(records) => {
-        records
+        Stream.emits(records)
           .covary[F]
           .through(
             encodeCsvRecordsToChunk[F, renderRow.type, R, V, S](renderRow))
@@ -159,9 +167,13 @@ trait CsvSupport {
         Stream(
           DataEvent.Commit(OffsetKey.Actual.string(s)))
 
-      case UpsertEvent.Delete(is) =>
+      case UpsertEvent.Delete(Ids.StringIds(is)) =>
         Stream(
           DataEvent.Delete(IdBatch.Strings(is.toArray, is.length)))
+
+      case UpsertEvent.Delete(Ids.LongIds(is)) =>
+        Stream(
+          DataEvent.Delete(IdBatch.Longs(is.toArray, is.length)))
     }
 
     columnsOf(events, renderRow, idColumn).flatMap(cols =>

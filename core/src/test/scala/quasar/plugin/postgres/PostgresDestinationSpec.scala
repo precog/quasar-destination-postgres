@@ -101,7 +101,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         val events =
           Stream(
-            UpsertEvent.Create(Stream.emits(recs)),
+            UpsertEvent.Create(recs),
             UpsertEvent.Commit("commit1"))
 
         for {
@@ -127,9 +127,9 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       upsertCsv(config()) { sink =>
         val events =
           Stream(
-            UpsertEvent.Create(Stream.emit(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+            UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
             UpsertEvent.Commit("commit1"),
-            UpsertEvent.Create(Stream.emit(("x" ->> "baz") :: ("y" ->> "qux") :: HNil)))
+            UpsertEvent.Create(List(("x" ->> "baz") :: ("y" ->> "qux") :: HNil)))
 
         for {
           tbl <- freshTableName
@@ -151,7 +151,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       upsertCsv(config()) { sink =>
         val events =
           Stream(
-            UpsertEvent.Create(Stream.emit(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+            UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
             UpsertEvent.Commit("commit1"),
             UpsertEvent.Commit("commit2"))
 
@@ -173,16 +173,16 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
-    "delete rows with string primary key" >>* {
+    "delete rows with string typed primary key" >>* {
       upsertCsv(config()) { sink =>
         val events =
           Stream(
             UpsertEvent.Create(
-              Stream(
+              List(
                 ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
                 ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
             UpsertEvent.Commit("commit1"),
-            UpsertEvent.Delete(List("foo")),
+            UpsertEvent.Delete(Ids.StringIds(List("foo"))),
             UpsertEvent.Commit("commit2"))
 
         for {
@@ -203,16 +203,46 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
+    "delete rows with long typed primary key" >>* {
+      upsertCsv(config()) { sink =>
+        val events =
+          Stream(
+            UpsertEvent.Create(
+              List(
+                ("x" ->> 40) :: ("y" ->> "bar") :: HNil,
+                ("x" ->> 42) :: ("y" ->> "qux") :: HNil)),
+            UpsertEvent.Commit("commit1"),
+            UpsertEvent.Delete(Ids.LongIds(List(40))),
+            UpsertEvent.Commit("commit2"))
+
+        for {
+          tbl <- freshTableName
+          (values, offsets) <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tbl,
+            sink,
+            Column("x", ColumnType.Number),
+            QWriteMode.Append,
+            events)
+        } yield {
+          values must_== List(42 :: "qux" :: HNil)
+          offsets must_== List(
+            OffsetKey.Actual.string("commit1"),
+            OffsetKey.Actual.string("commit2"))
+        }
+      }
+    }
+
     "empty deletes without failing" >>* {
       upsertCsv(config()) { sink =>
         val events =
           Stream(
             UpsertEvent.Create(
-              Stream(
+              List(
                 ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
                 ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
             UpsertEvent.Commit("commit1"),
-            UpsertEvent.Delete(List()),
+            UpsertEvent.Delete(Ids.StringIds(List())),
             UpsertEvent.Commit("commit2"))
 
         for {
@@ -241,13 +271,13 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         val events =
           Stream(
             UpsertEvent.Create(
-              Stream(
+              List(
                 ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
                 ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
             UpsertEvent.Commit("commit1"),
-            UpsertEvent.Delete(List("foo")),
+            UpsertEvent.Delete(Ids.StringIds(List("foo"))),
             UpsertEvent.Commit("commit2"),
-            UpsertEvent.Delete(List("foo")),
+            UpsertEvent.Delete(Ids.StringIds(List("foo"))),
             UpsertEvent.Commit("commit3"))
 
         for {
@@ -268,7 +298,6 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             OffsetKey.Actual.string("commit3"))
         }
       }
-
     }
   }
 
