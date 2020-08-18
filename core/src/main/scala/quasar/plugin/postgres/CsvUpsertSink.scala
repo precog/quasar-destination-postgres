@@ -206,8 +206,8 @@ object CsvUpsertSink extends Logging {
 
         logEnd0 = Stream.eval(logEnd(startAt, byteCounter)).drain
 
-        // we need to manually rollback anything not commited, or JDBC (or Doobie)
-        // will insert a commit at the end
+        // we need to manually rollback anything not commited, or an implicit commit
+        // will be inserted at the end (by the driver?)
         events = startLoad0.transact(xa) ++ (events0 ++ rollback0).transact(xa) ++ logEnd0
       } yield events)
   }
