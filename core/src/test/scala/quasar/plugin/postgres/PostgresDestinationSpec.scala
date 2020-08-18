@@ -95,13 +95,40 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   "csv upsert sink" should {
     "write after commit" >>* {
       upsertCsv(config()) { sink =>
-        val recs = List(
-          ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
-          ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)
-
         val events =
           Stream(
-            UpsertEvent.Create(recs),
+            UpsertEvent.Create(List(
+              ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
+              ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
+            UpsertEvent.Commit("commit1"))
+
+        for {
+          tbl <- freshTableName
+          (values, offsets) <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tbl,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Replace,
+            events)
+        } yield {
+          values must_== List(
+            "foo" :: "bar" :: HNil,
+            "baz" :: "qux" :: HNil)
+
+          offsets must_== List(OffsetKey.Actual.string("commit1"))
+        }
+      }
+    }
+
+    "write two chunks with a single commit" >>* {
+      upsertCsv(config()) { sink =>
+        val events =
+          Stream(
+            UpsertEvent.Create(List(
+              ("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+            UpsertEvent.Create(List(
+              ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
             UpsertEvent.Commit("commit1"))
 
         for {
@@ -128,6 +155,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         val events =
           Stream(
             UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+            UpsertEvent.Create(List(("x" ->> "quz") :: ("y" ->> "corge") :: HNil)),
             UpsertEvent.Commit("commit1"),
             UpsertEvent.Create(List(("x" ->> "baz") :: ("y" ->> "qux") :: HNil)))
 
@@ -141,7 +169,9 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             QWriteMode.Replace,
             events)
         } yield {
-          values must_== List("foo" :: "bar" :: HNil)
+          values must_== List(
+            "foo" :: "bar" :: HNil,
+            "quz" :: "corge" :: HNil)
           offsets must_== List(OffsetKey.Actual.string("commit1"))
         }
       }
@@ -530,7 +560,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
   val DM = PostgresDestinationModule
 
-  val TestConnectionUrl: String = "postgresql://localhost:54322/postgres?user=postgres&password=postgres"
+  val TestConnectionUrl: String = "postgresql://localhost:54322/pgdest?user=postgres&password=postgres"
 
   implicit val CS: ContextShift[IO] = IO.contextShift(global)
 

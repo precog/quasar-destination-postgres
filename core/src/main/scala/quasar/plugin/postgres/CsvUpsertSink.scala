@@ -32,12 +32,12 @@ import cats.effect.syntax.bracket._
 import cats.effect.{Effect, ExitCase, LiftIO, Timer}
 import cats.implicits._
 
-import doobie.free.connection.{rollback, setAutoCommit, unit}
+import doobie.free.connection.{commit, rollback, setAutoCommit, unit}
 import doobie.implicits._
 import doobie.postgres.implicits._
 import doobie.postgres.{PFCI, PFCM, PHC}
 import doobie.util.transactor.Strategy
-import doobie.{ConnectionIO, FC, Fragment, Fragments, Transactor}
+import doobie.{ConnectionIO, Fragment, Fragments, Transactor}
 
 import fs2.{Chunk, Pipe, Stream}
 
@@ -80,27 +80,29 @@ object CsvUpsertSink extends Logging {
           MonadResourceErr[F].raiseError(ResourceError.notAResource(args.path))
       }
 
+    def startLoad(tbl: Table, colSpecs: NonEmptyList[Fragment]): ConnectionIO[Unit] = {
+      val indexColumn = Fragments.parentheses(Fragment.const0(hygienicIdent(args.idColumn.name)))
+
+      (args.writeMode, writeMode) match {
+        case (QWriteMode.Replace, WriteMode.Create) =>
+          createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn) >> commit
+        case (QWriteMode.Replace, WriteMode.Replace) =>
+          dropTableIfExists(log)(tbl) >> createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn) >> commit
+        case (QWriteMode.Replace, WriteMode.Truncate) =>
+          createTableIfNotExists(log)(tbl, colSpecs) >> truncateTable(log)(tbl) >> createIndex(log)(tbl, indexColumn) >> commit
+        case (QWriteMode.Replace, WriteMode.Append) =>
+          createTableIfNotExists(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn) >> commit
+        case (QWriteMode.Append, _) =>
+          ().pure[ConnectionIO]
+      }
+    }
+
 
     def handleCreate(totalBytes: Ref[F, Long], records: Chunk[Byte]): ConnectionIO[Unit] =
       for {
         tbl <- toConnectionIO(table)
 
         colSpecs <- toConnectionIO(specifyColumnFragments[F](columns))
-
-        indexColumn = Fragments.parentheses(Fragment.const(hygienicIdent(args.idColumn.name)))
-
-        _ <- (args.writeMode, writeMode) match {
-          case (QWriteMode.Replace, WriteMode.Create) =>
-            createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
-          case (QWriteMode.Replace, WriteMode.Replace) =>
-            dropTableIfExists(log)(tbl) >> createTable(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
-          case (QWriteMode.Replace, WriteMode.Truncate) =>
-            createTableIfNotExists(log)(tbl, colSpecs) >> truncateTable(log)(tbl) >> createIndex(log)(tbl, indexColumn)
-          case (QWriteMode.Replace, WriteMode.Append) =>
-            createTableIfNotExists(log)(tbl, colSpecs) >> createIndex(log)(tbl, indexColumn)
-          case (QWriteMode.Append, _) =>
-            ().pure[ConnectionIO]
-        }
 
         cols = columns.map(c => hygienicIdent(c.name)).intercalate(", ")
 
@@ -134,7 +136,7 @@ object CsvUpsertSink extends Logging {
             fr"WHERE" ++
             Fragment.const(hygienicIdent(args.idColumn.name))
 
-        def deleteFrom(preamble: Fragment, table: Table): ConnectionIO[Int] =
+        def deleteFrom(preamble: Fragment): ConnectionIO[Int] =
           recordIds match {
             case IdBatch.Strings(values, _) =>
               Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector)) // trust size passed by quasar
@@ -157,12 +159,12 @@ object CsvUpsertSink extends Logging {
         for {
           tbl <- toConnectionIO(table)
           preamble = preambleFragment(tbl)
-          _ <- deleteFrom(preamble, tbl)
+          _ <- deleteFrom(preamble)
         } yield ()
       }
 
     def handleCommit(offset: OffsetKey.Actual[I]): ConnectionIO[OffsetKey.Actual[I]] =
-      FC.commit.as(offset)
+      commit.as(offset)
 
     def eventHandler(totalBytes: Ref[F, Long])
         : Pipe[ConnectionIO, DataEvent[OffsetKey.Actual[I]], Option[OffsetKey.Actual[I]]] =
@@ -187,10 +189,26 @@ object CsvUpsertSink extends Logging {
     Stream.force(
       for {
         byteCounter <- Ref[F].of(0L)
+
+        tbl <- table
+
+        colSpecs <- specifyColumnFragments[F](columns)
+
         startAt <- timer.clock.monotonic(MILLISECONDS)
-        logEnd0 = logEnd(startAt, byteCounter)
+
+        startLoad0 = Stream.eval(startLoad(tbl, colSpecs)).drain
+
         translated = args.input.translate(toConnectionIO)
-        events = eventHandler(byteCounter)(translated).unNone.transact(xa) ++ Stream.eval(logEnd0).drain
+
+        events0 = eventHandler(byteCounter)(translated).unNone
+
+        rollback0 = Stream.eval(rollback).drain
+
+        logEnd0 = Stream.eval(logEnd(startAt, byteCounter)).drain
+
+        // we need to manually rollback anything not commited, or JDBC (or Doobie)
+        // will insert a commit at the end
+        events = startLoad0.transact(xa) ++ (events0 ++ rollback0).transact(xa) ++ logEnd0
       } yield events)
   }
 }
