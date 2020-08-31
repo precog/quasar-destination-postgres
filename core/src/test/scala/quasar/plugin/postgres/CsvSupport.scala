@@ -77,7 +77,7 @@ trait CsvSupport {
   // TODO: handle includeHeader == true
   def toCsvSink[F[_]: ApplicativeError[?[_], Throwable], P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       dst: ResourcePath,
-      sink: ResultSink.CreateSink[F, ColumnType.Scalar],
+      sink: ResultSink.CreateSink[F, ColumnType.Scalar, Byte],
       renderRow: P,
       records: Stream[F, R])(
       implicit
@@ -97,7 +97,7 @@ trait CsvSupport {
         val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
         val encoded = rs.through(encodeCsvRecords[F, renderRow.type, R, V, S](renderRow))
 
-        sink.consume(dst, NonEmptyList.fromListUnsafe(columns), encoded).pull.echo
+        encoded.through(sink.consume(dst, NonEmptyList.fromListUnsafe(columns))._2).pull.echo
 
       case None => Pull.done
     }
