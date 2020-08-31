@@ -37,6 +37,7 @@ import org.slf4s.Logging
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource._
 import quasar.connector._
+import quasar.connector.render.RenderConfig
 
 import scala.concurrent.duration.MILLISECONDS
 
@@ -45,10 +46,9 @@ object CsvCreateSink extends Logging {
       xa: Transactor[F],
       writeMode: WriteMode)(
       dst: ResourcePath,
-      columns: NonEmptyList[Column[ColumnType.Scalar]],
-      data: Stream[F, Byte])(
+      columns: NonEmptyList[Column[ColumnType.Scalar]])(
       implicit timer: Timer[F])
-      : Stream[F, Unit] = {
+      : (RenderConfig[Byte], Pipe[F, Byte, Unit]) = {
 
     val AE = ApplicativeError[F, Throwable]
 
@@ -61,7 +61,7 @@ object CsvCreateSink extends Logging {
           MonadResourceErr[F].raiseError(ResourceError.notAResource(dst))
       }
 
-    Stream.force(for {
+    val pipe: Pipe[F, Byte, Unit] = data => Stream.force(for {
       tbl <- table
 
       action = writeMode match {
@@ -122,6 +122,8 @@ object CsvCreateSink extends Logging {
 
 
     } yield copy ++ Stream.eval(logEnd))
+
+    (PostgresCsvConfig, pipe)
   }
 
   ////
