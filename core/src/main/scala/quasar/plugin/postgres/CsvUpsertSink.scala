@@ -138,20 +138,20 @@ object CsvUpsertSink extends Logging {
 
         def deleteFrom(preamble: Fragment): ConnectionIO[Int] =
           recordIds match {
-            case IdBatch.Strings(values, _) =>
-              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector)) // trust size passed by quasar
+            case IdBatch.Strings(values, size) =>
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.take(size).toVector)) // trust size passed by quasar
                 .updateWithLogHandler(logHandler(log))
                 .run
-            case IdBatch.Longs(values, _) =>
-              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector))
+            case IdBatch.Longs(values, size) =>
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.take(size).toVector)) // trust size passed by quasar
                 .updateWithLogHandler(logHandler(log))
                 .run
-            case IdBatch.Doubles(values, _) =>
-              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector))
+            case IdBatch.Doubles(values, size) =>
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.take(size).toVector)) // trust size passed by quasar
                 .updateWithLogHandler(logHandler(log))
                 .run
-            case IdBatch.BigDecimals(values, _) =>
-              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.toVector))
+            case IdBatch.BigDecimals(values, size) =>
+              Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.take(size).toVector)) // trust size passed by quasar
                 .updateWithLogHandler(logHandler(log))
                 .run
         }
