@@ -50,19 +50,19 @@ object CsvUpsertSink extends Logging {
     xa0: Transactor[F],
     writeMode: WriteMode)(
     implicit timer: Timer[F])
-      : Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α] => Stream[F, OffsetKey.Actual[α]]]] = {
+      : Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α, Byte] => Stream[F, OffsetKey.Actual[α]]]] = {
 
     val strategy = Strategy(setAutoCommit(false), unit, rollback, unit)
     val xa = Transactor.strategy.modify(xa0, _ => strategy)
 
-    Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α] => Stream[F, OffsetKey.Actual[α]]]](
+    Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α, Byte] => Stream[F, OffsetKey.Actual[α]]]](
       run(xa, writeMode))
   }
 
   def run[F[_]: Effect: MonadResourceErr, I](
     xa: Transactor[F],
     writeMode: WriteMode)(
-    args: UpsertSink.Args[F, ColumnType.Scalar, I])(
+    args: UpsertSink.Args[F, ColumnType.Scalar, I, Byte])(
     implicit timer: Timer[F])
       : Stream[F, OffsetKey.Actual[I]] = {
 
@@ -167,7 +167,7 @@ object CsvUpsertSink extends Logging {
       commit.as(offset)
 
     def eventHandler(totalBytes: Ref[F, Long])
-        : Pipe[ConnectionIO, DataEvent[OffsetKey.Actual[I]], Option[OffsetKey.Actual[I]]] =
+        : Pipe[ConnectionIO, DataEvent[OffsetKey.Actual[I], Byte], Option[OffsetKey.Actual[I]]] =
       _ evalMap {
         case DataEvent.Create(records) =>
           handleCreate(totalBytes, records).as(none[OffsetKey.Actual[I]])

@@ -46,7 +46,6 @@ import quasar.api.resource._
 import quasar.contrib.scalaz.MonadError_
 import quasar.connector._
 import quasar.connector.destination.{WriteMode => QWriteMode, _}
-import quasar.connector.render.RenderConfig
 
 import scala.Float
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -597,15 +596,15 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           .getOrElse(IO.raiseError(new RuntimeException("No CSV sink found!")))
     }
 
-  def upsertCsv[A](cfg: Json)(f: ResultSink.UpsertSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
+  def upsertCsv[A](cfg: Json)(f: ResultSink.UpsertSink[IO, ColumnType.Scalar, Byte] => IO[A]): IO[A] =
     dest(cfg) {
       case Left(err) =>
         IO.raiseError(new RuntimeException(err.shows))
 
       case Right(dst) =>
         dst.sinks.toList
-          .collectFirst { case c @ ResultSink.UpsertSink(_: RenderConfig.Csv, _) => c }
-          .map(s => f(s.asInstanceOf[ResultSink.UpsertSink[IO, ColumnType.Scalar]]))
+          .collectFirst { case c @ ResultSink.UpsertSink(_, _) => c }
+          .map(s => f(s.asInstanceOf[ResultSink.UpsertSink[IO, ColumnType.Scalar, Byte]]))
           .getOrElse(IO.raiseError(new RuntimeException("No upsert CSV sink found!")))
     }
 
@@ -615,7 +614,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   def upsertDrainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       connectionUri: String,
       table: Table,
-      sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
+      sink: ResultSink.UpsertSink[F, ColumnType.Scalar, Byte],
       idColumn: Column[ColumnType.Scalar],
       writeMode: QWriteMode,
       records: Stream[F, UpsertEvent[R]])(
@@ -639,7 +638,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
           connectionUri: String,
           table: Table,
-          sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
+          sink: ResultSink.UpsertSink[F, ColumnType.Scalar, Byte],
           idColumn: Column[ColumnType.Scalar],
           writeMode: QWriteMode,
           records: Stream[F, UpsertEvent[R]])(

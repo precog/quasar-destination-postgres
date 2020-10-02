@@ -139,7 +139,7 @@ trait CsvSupport {
 
   def toUpsertCsvSink[F[_]: Async, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       dst: ResourcePath,
-      sink: ResultSink.UpsertSink[F, ColumnType.Scalar],
+      sink: ResultSink.UpsertSink[F, ColumnType.Scalar, Byte],
       idColumn: Column[ColumnType.Scalar],
       writeMode: QWriteMode,
       renderRow: P,
@@ -154,13 +154,13 @@ trait CsvSupport {
       ttl: ToList[T, ColumnType.Scalar])
       : Stream[F, OffsetKey.Actual[String]] = {
 
-    val encoded: Stream[F, DataEvent[OffsetKey.Actual[String]]] = events flatMap {
+    val encoded: Stream[F, DataEvent[OffsetKey.Actual[String], Byte]] = events flatMap {
       case UpsertEvent.Create(records) => {
         Stream.emits(records)
           .covary[F]
           .through(
             encodeCsvRecordsToChunk[F, renderRow.type, R, V, S](renderRow))
-          .map(DataEvent.Create)
+          .map(DataEvent.create[OffsetKey.Actual[String], Byte])
       }
 
       case UpsertEvent.Commit(s) =>
