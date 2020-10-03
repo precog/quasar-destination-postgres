@@ -603,7 +603,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
       case Right(dst) =>
         dst.sinks.toList
-          .collectFirst { case c @ ResultSink.UpsertSink(_, _) => c }
+          .collectFirst { case c @ ResultSink.UpsertSink(_) => c }
           .map(s => f(s.asInstanceOf[ResultSink.UpsertSink[IO, ColumnType.Scalar, Byte]]))
           .getOrElse(IO.raiseError(new RuntimeException("No upsert CSV sink found!")))
     }

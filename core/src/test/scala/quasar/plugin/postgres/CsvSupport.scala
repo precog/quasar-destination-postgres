@@ -176,10 +176,12 @@ trait CsvSupport {
           DataEvent.Delete(IdBatch.Longs(is.toArray, is.length)))
     }
 
-    columnsOf(events, renderRow, idColumn).flatMap(cols =>
-      sink.consume.apply(
-        ResultSink.UpsertSink.Args(
-          dst, idColumn, cols, writeMode, encoded)))
+    columnsOf(events, renderRow, idColumn) flatMap { cols =>
+      val (_, pipe) = sink.consume.apply(
+        ResultSink.UpsertSink.Args(dst, idColumn, cols, writeMode))
+
+      encoded.through(pipe[String])
+    }
   }
 
   def encodeCsvRecordsToChunk[F[_]: Async, P <: Poly1, R <: HList, V <: HList, S <: HList](
