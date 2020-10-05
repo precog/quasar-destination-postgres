@@ -51,7 +51,7 @@ object CsvUpsertSink extends Logging {
     xa0: Transactor[F],
     writeMode: WriteMode)(
     implicit timer: Timer[F])
-      : UpsertSink.Args[ColumnType.Scalar] => (RenderConfig[Byte], ∀[λ[α => Pipe[F, DataEvent[OffsetKey.Actual[α], Byte], OffsetKey.Actual[α]]]]) = {
+      : UpsertSink.Args[ColumnType.Scalar] => (RenderConfig[Byte], ∀[λ[α => Pipe[F, DataEvent[Byte, OffsetKey.Actual[α]], OffsetKey.Actual[α]]]]) = {
 
     val strategy = Strategy(setAutoCommit(false), unit, rollback, unit)
     val xa = Transactor.strategy.modify(xa0, _ => strategy)
@@ -64,7 +64,7 @@ object CsvUpsertSink extends Logging {
     writeMode: WriteMode)(
     args: UpsertSink.Args[ColumnType.Scalar])(
     implicit timer: Timer[F])
-      : (RenderConfig[Byte], ∀[λ[α => Pipe[F, DataEvent[OffsetKey.Actual[α], Byte], OffsetKey.Actual[α]]]]) = {
+      : (RenderConfig[Byte], ∀[λ[α => Pipe[F, DataEvent[Byte, OffsetKey.Actual[α]], OffsetKey.Actual[α]]]]) = {
 
     val columns: NonEmptyList[Column[ColumnType.Scalar]] =
       NonEmptyList(args.idColumn, args.otherColumns)
@@ -167,7 +167,7 @@ object CsvUpsertSink extends Logging {
       commit.as(offset)
 
     def eventHandler[I](totalBytes: Ref[F, Long])
-        : Pipe[ConnectionIO, DataEvent[OffsetKey.Actual[I], Byte], Option[OffsetKey.Actual[I]]] =
+        : Pipe[ConnectionIO, DataEvent[Byte, OffsetKey.Actual[I]], Option[OffsetKey.Actual[I]]] =
       _ evalMap {
         case DataEvent.Create(records) =>
           handleCreate(totalBytes, records).as(none[OffsetKey.Actual[I]])
@@ -186,7 +186,7 @@ object CsvUpsertSink extends Logging {
       } yield ()
 
 
-    def pipe[A](dataEvents: Stream[F, DataEvent[OffsetKey.Actual[A], Byte]])
+    def pipe[A](dataEvents: Stream[F, DataEvent[Byte, OffsetKey.Actual[A]]])
         : Stream[F, OffsetKey.Actual[A]] =
       Stream.force(
         for {
@@ -213,6 +213,6 @@ object CsvUpsertSink extends Logging {
           events = startLoad0.transact(xa) ++ (events0 ++ rollback0).transact(xa) ++ logEnd0
         } yield events)
 
-    (PostgresCsvConfig, ∀[λ[α => Pipe[F, DataEvent[OffsetKey.Actual[α], Byte], OffsetKey.Actual[α]]]](pipe))
+    (PostgresCsvConfig, ∀[λ[α => Pipe[F, DataEvent[Byte, OffsetKey.Actual[α]], OffsetKey.Actual[α]]]](pipe))
   }
 }
