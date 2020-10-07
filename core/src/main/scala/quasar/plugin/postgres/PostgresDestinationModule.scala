@@ -33,7 +33,7 @@ import java.util.concurrent.Executors
 import org.slf4s.Logging
 
 import quasar.api.destination.{DestinationError => DE, _}
-import quasar.{concurrent => qc}
+import quasar.concurrent._
 import quasar.connector.MonadResourceErr
 import quasar.connector.destination.{Destination, DestinationModule, PushmiPullyu}
 
@@ -88,7 +88,7 @@ object PostgresDestinationModule extends DestinationModule with Logging {
 
       awaitPool <- EitherT.right(awaitConnPool[F](s"pgdest-await-$suffix", ConnectionPoolSize))
 
-      xaPool <- EitherT.right(transactPool[F](s"pgdest-transact-$suffix"))
+      xaPool <- EitherT.right(Blocker.cached[F](s"pgdest-transact-$suffix"))
 
       xa <- EitherT.right(hikariTransactor[F](cfg, awaitPool, xaPool))
 
@@ -113,7 +113,7 @@ object PostgresDestinationModule extends DestinationModule with Logging {
       : Resource[F, ExecutionContext] = {
 
     val alloc =
-      F.delay(Executors.newFixedThreadPool(size, qc.NamedDaemonThreadFactory(name)))
+      F.delay(Executors.newFixedThreadPool(size, NamedDaemonThreadFactory(name)))
 
     Resource.make(alloc)(es => F.delay(es.shutdown()))
       .map(ExecutionContext.fromExecutor)
@@ -140,15 +140,5 @@ object PostgresDestinationModule extends DestinationModule with Logging {
         }
       }
     }
-  }
-
-  private def transactPool[F[_]](name: String)(implicit F: Sync[F])
-      : Resource[F, Blocker] = {
-
-    val alloc =
-      F.delay(Executors.newCachedThreadPool(qc.NamedDaemonThreadFactory(name)))
-
-    Resource.make(alloc)(es => F.delay(es.shutdown()))
-      .map(es => qc.Blocker(ExecutionContext.fromExecutor(es)))
   }
 }
