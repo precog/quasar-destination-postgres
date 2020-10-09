@@ -22,6 +22,7 @@ import quasar.api.push.OffsetKey
 import quasar.api.{Column, ColumnType}
 import quasar.connector.destination.ResultSink.UpsertSink
 import quasar.connector.destination.{WriteMode => QWriteMode}
+import quasar.connector.render.RenderConfig
 import quasar.connector.{DataEvent, IdBatch, MonadResourceErr, ResourceError}
 
 import org.slf4s.Logging
@@ -43,28 +44,27 @@ import fs2.{Chunk, Pipe, Stream}
 
 import scala.concurrent.duration.MILLISECONDS
 
-import skolems.Forall
+import skolems.∀
 
 object CsvUpsertSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
     xa0: Transactor[F],
     writeMode: WriteMode)(
     implicit timer: Timer[F])
-      : Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α] => Stream[F, OffsetKey.Actual[α]]]] = {
+      : UpsertSink.Args[ColumnType.Scalar] => (RenderConfig[Byte], ∀[λ[α => Pipe[F, DataEvent[Byte, OffsetKey.Actual[α]], OffsetKey.Actual[α]]]]) = {
 
     val strategy = Strategy(setAutoCommit(false), unit, rollback, unit)
     val xa = Transactor.strategy.modify(xa0, _ => strategy)
 
-    Forall[λ[α => UpsertSink.Args[F, ColumnType.Scalar, α] => Stream[F, OffsetKey.Actual[α]]]](
-      run(xa, writeMode))
+    run(xa, writeMode)
   }
 
-  def run[F[_]: Effect: MonadResourceErr, I](
+  def run[F[_]: Effect: MonadResourceErr](
     xa: Transactor[F],
     writeMode: WriteMode)(
-    args: UpsertSink.Args[F, ColumnType.Scalar, I])(
+    args: UpsertSink.Args[ColumnType.Scalar])(
     implicit timer: Timer[F])
-      : Stream[F, OffsetKey.Actual[I]] = {
+      : (RenderConfig[Byte], ∀[λ[α => Pipe[F, DataEvent[Byte, OffsetKey.Actual[α]], OffsetKey.Actual[α]]]]) = {
 
     val columns: NonEmptyList[Column[ColumnType.Scalar]] =
       NonEmptyList(args.idColumn, args.otherColumns)
@@ -163,11 +163,11 @@ object CsvUpsertSink extends Logging {
         } yield ()
       }
 
-    def handleCommit(offset: OffsetKey.Actual[I]): ConnectionIO[OffsetKey.Actual[I]] =
+    def handleCommit[I](offset: OffsetKey.Actual[I]): ConnectionIO[OffsetKey.Actual[I]] =
       commit.as(offset)
 
-    def eventHandler(totalBytes: Ref[F, Long])
-        : Pipe[ConnectionIO, DataEvent[OffsetKey.Actual[I]], Option[OffsetKey.Actual[I]]] =
+    def eventHandler[I](totalBytes: Ref[F, Long])
+        : Pipe[ConnectionIO, DataEvent[Byte, OffsetKey.Actual[I]], Option[OffsetKey.Actual[I]]] =
       _ evalMap {
         case DataEvent.Create(records) =>
           handleCreate(totalBytes, records).as(none[OffsetKey.Actual[I]])
@@ -186,29 +186,33 @@ object CsvUpsertSink extends Logging {
       } yield ()
 
 
-    Stream.force(
-      for {
-        byteCounter <- Ref[F].of(0L)
+    def pipe[A](dataEvents: Stream[F, DataEvent[Byte, OffsetKey.Actual[A]]])
+        : Stream[F, OffsetKey.Actual[A]] =
+      Stream.force(
+        for {
+          byteCounter <- Ref[F].of(0L)
 
-        tbl <- table
+          tbl <- table
 
-        colSpecs <- specifyColumnFragments[F](columns)
+          colSpecs <- specifyColumnFragments[F](columns)
 
-        startAt <- timer.clock.monotonic(MILLISECONDS)
+          startAt <- timer.clock.monotonic(MILLISECONDS)
 
-        startLoad0 = Stream.eval(startLoad(tbl, colSpecs)).drain
+          startLoad0 = Stream.eval(startLoad(tbl, colSpecs)).drain
 
-        translated = args.input.translate(toConnectionIO)
+          translated = dataEvents.translate(toConnectionIO)
 
-        events0 = eventHandler(byteCounter)(translated).unNone
+          events0 = eventHandler(byteCounter)(translated).unNone
 
-        rollback0 = Stream.eval(rollback).drain
+          rollback0 = Stream.eval(rollback).drain
 
-        logEnd0 = Stream.eval(logEnd(startAt, byteCounter)).drain
+          logEnd0 = Stream.eval(logEnd(startAt, byteCounter)).drain
 
-        // we need to manually rollback anything not commited, or an implicit commit
-        // will be inserted at the end (by the driver?)
-        events = startLoad0.transact(xa) ++ (events0 ++ rollback0).transact(xa) ++ logEnd0
-      } yield events)
+          // we need to manually rollback anything not commited, or an implicit commit
+          // will be inserted at the end (by the driver?)
+          events = startLoad0.transact(xa) ++ (events0 ++ rollback0).transact(xa) ++ logEnd0
+        } yield events)
+
+    (PostgresCsvConfig, ∀[λ[α => Pipe[F, DataEvent[Byte, OffsetKey.Actual[α]], OffsetKey.Actual[α]]]](pipe))
   }
 }
