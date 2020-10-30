@@ -49,7 +49,7 @@ object PostgresDestinationModule extends DestinationModule with Logging {
   val ValidationTimeout: FiniteDuration = 10.seconds
 
   // Maximum number of database connections per-destination.
-  val ConnectionPoolSize: Int = 10
+  val ConnectionPoolSize: Int = 32 // TODO make this customizable
 
   val destinationType: DestinationType = DestinationType("postgres", 1L)
 
