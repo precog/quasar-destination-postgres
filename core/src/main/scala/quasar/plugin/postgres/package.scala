@@ -123,11 +123,16 @@ package object postgres {
       .run
   }
 
-  def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] =
-    ((fr"CREATE INDEX IF NOT EXISTS __precog_ix__ ON" ++
+  def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] = {
+    val idxName = s"precog_id_idx_$table"
+
+    ((fr"CREATE INDEX IF NOT EXISTS" ++
+      Fragment.const(hygienicIdent(idxName)) ++
+      fr"ON" ++
       Fragment.const(hygienicIdent(table))) ++ col)
       .updateWithLogHandler(logHandler(log))
       .run
+  }
 
   def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
     (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))

@@ -366,6 +366,47 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         }
       }
     }
+
+    "creates an index for each table on correlation id" >>* {
+      upsertCsv(config()) { sink =>
+        val events =
+          Stream(
+            UpsertEvent.Create(List(
+              ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
+              ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
+            UpsertEvent.Commit("commit1"))
+
+        for {
+          tblA <- freshTableName
+          tblB <- freshTableName
+
+          _ <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tblA,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Replace,
+            events)
+
+          _ <- upsertDrainAndSelect(
+            TestConnectionUrl,
+            tblB,
+            sink,
+            Column("x", ColumnType.String),
+            QWriteMode.Replace,
+            events)
+
+          tables = NonEmptyList.of(tblA, tblB)
+
+          checkIndexes =
+            fr"SELECT count(*) FROM pg_indexes WHERE" ++ Fragments.in(fr"tablename", tables)
+
+          indexCount <- runDb[IO, Int](checkIndexes.query[Int].unique)
+        } yield {
+          indexCount must_=== 2
+        }
+      }
+    }
   }
 
   "csv sink" should {
