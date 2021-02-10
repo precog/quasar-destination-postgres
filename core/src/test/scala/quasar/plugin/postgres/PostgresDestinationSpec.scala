@@ -649,9 +649,103 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           .getOrElse(IO.raiseError(new RuntimeException("No upsert CSV sink found!")))
     }
 
+  def appendSink[A](cfg: Json)(f: ResultSink.AppendSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
+    dest(cfg) {
+      case Left(err) =>
+        IO.raiseError(new RuntimeException(err.shows))
+
+      case Right(dst) =>
+        dst.sinks.toList
+          .collectFirst { case c @ ResultSink.UpsertSink(_) => c }
+          .map(s => f(s.asInstanceOf[ResultSink.AppendSink[IO, ColumnType.Scalar]]))
+          .getOrElse(IO.raiseError(new RuntimeException("No append CSV sink found!")))
+    }
+
   def dest[A](cfg: Json)(f: Either[DM.InitErr, Destination[IO]] => IO[A]): IO[A] =
     DM.destination[IO](cfg, _ => _ => Stream.empty).use(f)
 
+  trait Consumer[F[_], A] {
+    def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+        connectionUri: String,
+        table: Table,
+        idColumn: Option[Column[F, ColumnType.Scalar]],
+        writeMode: QWriteMode,
+        records: Stream[F, UpsertEvent[R]])(
+        implicit
+        async: Async[F],
+        cshift: ContextShift[F],
+        read: Read[A],
+        keys: Keys.Aux[R, K],
+        values: Values.Aux[R, V],
+        getTypes: Mapper.Aux[asColumnType.type, V, T],
+        rrow: Mapper.Aux[renderRow.type, V, S],
+        ktl: ToList[K, String],
+        vtl: ToList[S, String],
+        ttl: ToList[T, ColumnType.Scalar])
+        : F[(List[A], List[OffsetKey.Actual[String]])]
+  }
+
+  def appendDrainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+      connectionUri: String,
+      table: Table,
+      sink: ResultSink.AppendSink[F, ColumnType.Scalar],
+      idColumn: Option[Column[ColumnType.Scalar]],
+      writeMode: QWriteMode,
+      records: Stream[F, UpsertEvent[R]])(
+      implicit
+      keys: Keys.Aux[R, K],
+      values: Values.Aux[R, V],
+      read: Read[V],
+      getTypes: Mapper.Aux[asColumnType.type, V, T],
+      rrow: Mapper.Aux[renderRow.type, V, S],
+      ktl: ToList[K, String],
+      vtl: ToList[S, String],
+      ttl: ToList[T, ColumnType.Scalar])
+      : F[(List[V], List[OffsetKey.Actual[String]])] =
+    appendDrainAndSelectAs[F, V](connectionUri, table, sink, idColumn, writeMode, records)
+
+  object appendDrainAndSelectAs {
+    def apply[F[_], A]: PartiallyApplied[F, A] =
+      new PartiallyApplied[F, A]
+
+    final class PartiallyApplied[F[_], A]() {
+      def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+          connectionUri: String,
+          table: Table,
+          sink: ResultSink.AppendSink[F, ColumnType.Scalar],
+          idColumn: Option[Column[ColumnType.Scalar]],
+          writeMode: QWriteMode,
+          records: Stream[F, UpsertEvent[R]])(
+          implicit
+          async: Async[F],
+          cshift: ContextShift[F],
+          read: Read[A],
+          keys: Keys.Aux[R, K],
+          values: Values.Aux[R, V],
+          getTypes: Mapper.Aux[asColumnType.type, V, T],
+          rrow: Mapper.Aux[renderRow.type, V, S],
+          ktl: ToList[K, String],
+          vtl: ToList[S, String],
+          ttl: ToList[T, ColumnType.Scalar])
+          : F[(List[A], List[OffsetKey.Actual[String]])] =
+        for {
+          tableColumns <- columnsOf(records, renderRow, idColumn).compile.lastOrError
+
+          colList = (idColumn.toList ++ tableColumns).map(k =>
+            Fragment.const(hygienicIdent(k.name))).intercalate(fr",")
+
+          dst = ResourcePath.root() / ResourceName(table)
+
+          offsets <- toAppendCsvSink(
+            dst, sink, idColumn, writeMode, renderRow, records).compile.toList
+
+          q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
+
+          rows <- runDb[F, List[A]](q.query[A].to[List], connectionUri)
+
+        } yield (rows, offsets)
+    }
+  }
   def upsertDrainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
       connectionUri: String,
       table: Table,
@@ -696,7 +790,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           ttl: ToList[T, ColumnType.Scalar])
           : F[(List[A], List[OffsetKey.Actual[String]])] =
         for {
-          tableColumns <- columnsOf(records, renderRow, idColumn).compile.lastOrError
+          tableColumns <- columnsOf(records, renderRow, Some(idColumn)).compile.lastOrError
 
           colList = (idColumn :: tableColumns).map(k =>
             Fragment.const(hygienicIdent(k.name))).intercalate(fr",")
