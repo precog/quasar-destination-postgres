@@ -70,3 +70,5 @@ lazy val core = project
       "io.argonaut" %% "argonaut-scalaz" % "6.2.3" % Test
     ))
   .enablePlugins(QuasarPlugin)
+  .evictToLocal("QUASAR_PATH", "api", true)
+  .evictToLocal("QUASAR_PATH", "connector", true)

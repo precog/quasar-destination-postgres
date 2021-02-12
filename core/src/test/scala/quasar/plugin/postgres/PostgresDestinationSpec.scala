@@ -35,6 +35,8 @@ import java.net.URI
 import java.time._
 
 import org.specs2.matcher.MatchResult
+import org.specs2.execute.AsResult
+import org.specs2.specification.core.{Fragment => SFragment}
 
 import qdata.time._
 
@@ -91,25 +93,37 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
   }
 
-  "csv upsert sink" should {
-    "write after commit" >>* {
-      upsertCsv(config()) { sink =>
-        val events =
-          Stream(
-            UpsertEvent.Create(List(
-              ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
-              ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
-            UpsertEvent.Commit("commit1"))
+  "seek sinks (upsert and append)" should {
+    "write after commit" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
+      val events =
+        Stream(
+          UpsertEvent.Create(List(
+            ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
+            ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
+          UpsertEvent.Commit("commit1"))
 
-        for {
-          tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+      for {
+        tbl <- freshTableName
+        (values, offsets) <- consumer(tbl, toOpt(Column("x", ColumnType.String)), QWriteMode.Replace, events)
+        } yield {
+          values must_== List(
+            "foo" :: "bar" :: HNil,
+            "baz" :: "qux" :: HNil)
+        }
+    }
+
+    "write two chunks with a single commit" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
+      val events =
+        Stream(
+          UpsertEvent.Create(List(
+            ("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+          UpsertEvent.Create(List(
+            ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
+          UpsertEvent.Commit("commit1"))
+
+      for {
+        tbl <- freshTableName
+        (values, offsets) <- consumer(tbl, toOpt(Column("x", ColumnType.String)), QWriteMode.Replace, events)
         } yield {
           values must_== List(
             "foo" :: "bar" :: HNil,
@@ -117,93 +131,47 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
           offsets must_== List(OffsetKey.Actual.string("commit1"))
         }
-      }
     }
 
-    "write two chunks with a single commit" >>* {
-      upsertCsv(config()) { sink =>
-        val events =
-          Stream(
-            UpsertEvent.Create(List(
-              ("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
-            UpsertEvent.Create(List(
-              ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
-            UpsertEvent.Commit("commit1"))
+    "not write without a commit" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
+      val events =
+        Stream(
+          UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+          UpsertEvent.Create(List(("x" ->> "quz") :: ("y" ->> "corge") :: HNil)),
+          UpsertEvent.Commit("commit1"),
+          UpsertEvent.Create(List(("x" ->> "baz") :: ("y" ->> "qux") :: HNil)))
 
-        for {
-          tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
-        } yield {
-          values must_== List(
-            "foo" :: "bar" :: HNil,
-            "baz" :: "qux" :: HNil)
-
-          offsets must_== List(OffsetKey.Actual.string("commit1"))
-        }
-      }
-    }
-
-    "not write without a commit" >>* {
-      upsertCsv(config()) { sink =>
-        val events =
-          Stream(
-            UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
-            UpsertEvent.Create(List(("x" ->> "quz") :: ("y" ->> "corge") :: HNil)),
-            UpsertEvent.Commit("commit1"),
-            UpsertEvent.Create(List(("x" ->> "baz") :: ("y" ->> "qux") :: HNil)))
-
-        for {
-          tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+      for {
+        tbl <- freshTableName
+        (values, offsets) <- consumer(tbl, toOpt(Column("x", ColumnType.String)), QWriteMode.Replace, events)
         } yield {
           values must_== List(
             "foo" :: "bar" :: HNil,
             "quz" :: "corge" :: HNil)
           offsets must_== List(OffsetKey.Actual.string("commit1"))
         }
-      }
     }
 
-    "commit twice in a row" >>* {
-      upsertCsv(config()) { sink =>
-        val events =
-          Stream(
-            UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
-            UpsertEvent.Commit("commit1"),
-            UpsertEvent.Commit("commit2"))
+    "commit twice in a row" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
+      val events =
+        Stream(
+          UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+          UpsertEvent.Commit("commit1"),
+          UpsertEvent.Commit("commit2"))
 
-        for {
-          tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+      for {
+        tbl <- freshTableName
+        (values, offsets) <- consumer(tbl, toOpt(Column("x", ColumnType.String)), QWriteMode.Replace, events)
         } yield {
           values must_== List("foo" :: "bar" :: HNil)
           offsets must_== List(
             OffsetKey.Actual.string("commit1"),
             OffsetKey.Actual.string("commit2"))
         }
-      }
     }
 
-    "delete rows with string typed primary key" >>* {
-      upsertCsv(config()) { sink =>
+    "upsert delete rows with string typed primary key" >>* {
+      Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
           Stream(
             UpsertEvent.Create(
@@ -216,13 +184,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         for {
           tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+          (values, offsets) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Replace, events)
         } yield {
           values must_== List("baz" :: "qux" :: HNil)
           offsets must_== List(
@@ -232,8 +194,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
-    "delete rows with long typed primary key" >>* {
-      upsertCsv(config()) { sink =>
+    "upsert delete rows with long typed primary key" >>* {
+      Consumer.upsert[Int :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
           Stream(
             UpsertEvent.Create(
@@ -246,13 +208,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         for {
           tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.Number),
-            QWriteMode.Replace,
-            events)
+          (values, offsets) <- consumer(tbl, Some(Column("x", ColumnType.Number)), QWriteMode.Replace, events)
         } yield {
           values must_== List(42 :: "qux" :: HNil)
           offsets must_== List(
@@ -262,8 +218,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
-    "empty deletes without failing" >>* {
-      upsertCsv(config()) { sink =>
+    "upsert empty deletes without failing" >>* {
+      Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
           Stream(
             UpsertEvent.Create(
@@ -276,13 +232,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         for {
           tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+          (values, offsets) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Replace, events)
         } yield {
           values must_== List(
             "foo" :: "bar" :: HNil,
@@ -295,8 +245,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
-    "delete same id twice" >>* {
-      upsertCsv(config()) { sink =>
+    "upsert delete same id twice" >>* {
+      Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
           Stream(
             UpsertEvent.Create(
@@ -311,13 +261,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         for {
           tbl <- freshTableName
-          (values, offsets) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+          (values, offsets) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Replace, events)
         } yield {
           values must_== List("baz" :: "qux" :: HNil)
 
@@ -329,72 +273,72 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
-    "creates table and then appends" >>* {
-      upsertCsv(config()) { sink =>
-        val events1 =
-          Stream(
-            UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
-            UpsertEvent.Commit("commit1"))
+    "creates table and then appends" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
+      val events1 =
+        Stream(
+          UpsertEvent.Create(List(("x" ->> "foo") :: ("y" ->> "bar") :: HNil)),
+          UpsertEvent.Commit("commit1"))
 
-        val events2 =
-          Stream(
-            UpsertEvent.Create(List(("x" ->> "bar") :: ("y" ->> "qux") :: HNil)),
-            UpsertEvent.Commit("commit2"))
+      val events2 =
+        Stream(
+          UpsertEvent.Create(List(("x" ->> "bar") :: ("y" ->> "qux") :: HNil)),
+          UpsertEvent.Commit("commit2"))
 
-        for {
-          tbl <- freshTableName
+      for {
+        tbl <- freshTableName
 
-          _ <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events1)
+        _ <- consumer(tbl, toOpt(Column("x", ColumnType.String)), QWriteMode.Replace, events1)
 
-          (values, _) <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tbl,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Append,
-            events2)
+        (values, _) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Append, events2)
         } yield {
           values must_== List(
             "foo" :: "bar" :: HNil,
             "bar" :: "qux" :: HNil)
         }
-      }
     }
 
-    "creates an index for each table on correlation id" >>* {
-      upsertCsv(config()) { sink =>
+    "creates an index for each table on correlation id" >> idOnly[String :: String :: HNil] { (toOpt, consumer) =>
+      val events =
+        Stream(
+          UpsertEvent.Create(List(
+            ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
+            ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
+          UpsertEvent.Commit("commit1"))
+
+      for {
+        tblA <- freshTableName
+        tblB <- freshTableName
+
+        _ <- consumer(tblA, toOpt(Column("x", ColumnType.String)), QWriteMode.Replace, events)
+
+        _ <- consumer(tblB, toOpt(Column("x", ColumnType.String)), QWriteMode.Replace, events)
+
+        tables = NonEmptyList.of(tblA, tblB)
+
+        checkIndexes =
+          fr"SELECT count(*) FROM pg_indexes WHERE" ++ Fragments.in(fr"tablename", tables)
+
+        indexCount <- runDb[IO, Int](checkIndexes.query[Int].unique)
+      } yield {
+        indexCount must_=== 2
+      }
+    }
+    "doesn't create indices if there is no ids" >>*
+      Consumer.append[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
           Stream(
             UpsertEvent.Create(List(
               ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
               ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
-            UpsertEvent.Commit("commit1"))
+          UpsertEvent.Commit("commit1"))
 
         for {
           tblA <- freshTableName
           tblB <- freshTableName
 
-          _ <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tblA,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+          _ <- consumer(tblA, None, QWriteMode.Replace, events)
 
-          _ <- upsertDrainAndSelect(
-            TestConnectionUrl,
-            tblB,
-            sink,
-            Column("x", ColumnType.String),
-            QWriteMode.Replace,
-            events)
+          _ <- consumer(tblB, None, QWriteMode.Replace, events)
 
           tables = NonEmptyList.of(tblA, tblB)
 
@@ -403,10 +347,9 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
           indexCount <- runDb[IO, Int](checkIndexes.query[Int].unique)
         } yield {
-          indexCount must_=== 2
+          indexCount must_=== 0
         }
       }
-    }
   }
 
   "csv sink" should {
@@ -536,19 +479,16 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           .map(_ must_=== List(None))
       }
     }
-
     "roundtrip LocalTime" >>* mustRoundtrip(
       ("min" ->> B.MinLocalTime) ::
       ("max" ->> B.MaxLocalTime) ::
       HNil)
-
 /*  TODO: Figure out how to represent this through the PG driver
     "roundtrip OffsetTime" >>* mustRoundtrip(
       ("min" ->> B.MinOffsetTime) ::
       ("max" ->> B.MaxOffsetTime) ::
       HNil)
 */
-
     "load LocalDate bounds" >>* {
       loadAndRetrieve(("min" ->> B.MinLocalDate) :: ("max" ->> B.MaxLocalDate) :: HNil)
         .map(_ must not(beEmpty))
@@ -649,68 +589,161 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           .getOrElse(IO.raiseError(new RuntimeException("No upsert CSV sink found!")))
     }
 
+  def appendSink[A](cfg: Json)(f: ResultSink.AppendSink[IO, ColumnType.Scalar] => IO[A]): IO[A] =
+    dest(cfg) {
+      case Left(err) =>
+        IO.raiseError(new RuntimeException(err.shows))
+
+      case Right(dst) =>
+        dst.sinks.toList
+          .collectFirst { case c @ ResultSink.AppendSink(_) => c }
+          .map(s => f(s.asInstanceOf[ResultSink.AppendSink[IO, ColumnType.Scalar]]))
+          .getOrElse(IO.raiseError(new RuntimeException("No append CSV sink found!")))
+    }
+
   def dest[A](cfg: Json)(f: Either[DM.InitErr, Destination[IO]] => IO[A]): IO[A] =
     DM.destination[IO](cfg, _ => _ => Stream.empty).use(f)
 
-  def upsertDrainAndSelect[F[_]: Async: ContextShift, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
-      connectionUri: String,
-      table: Table,
-      sink: ResultSink.UpsertSink[F, ColumnType.Scalar, Byte],
-      idColumn: Column[ColumnType.Scalar],
-      writeMode: QWriteMode,
-      records: Stream[F, UpsertEvent[R]])(
-      implicit
-      keys: Keys.Aux[R, K],
-      values: Values.Aux[R, V],
-      read: Read[V],
-      getTypes: Mapper.Aux[asColumnType.type, V, T],
-      rrow: Mapper.Aux[renderRow.type, V, S],
-      ktl: ToList[K, String],
-      vtl: ToList[S, String],
-      ttl: ToList[T, ColumnType.Scalar])
-      : F[(List[V], List[OffsetKey.Actual[String]])] =
-    upsertDrainAndSelectAs[F, V](connectionUri, table, sink, idColumn, writeMode, records)
+  trait Consumer[A]{
+    def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+        table: Table,
+        idColumn: Option[Column[ColumnType.Scalar]],
+        writeMode: QWriteMode,
+        records: Stream[IO, UpsertEvent[R]])(
+        implicit
+        read: Read[A],
+        keys: Keys.Aux[R, K],
+        values: Values.Aux[R, V],
+        getTypes: Mapper.Aux[asColumnType.type, V, T],
+        rrow: Mapper.Aux[renderRow.type, V, S],
+        ktl: ToList[K, String],
+        vtl: ToList[S, String],
+        ttl: ToList[T, ColumnType.Scalar])
+        : IO[(List[A], List[OffsetKey.Actual[String]])]
+  }
 
-  object upsertDrainAndSelectAs {
-    def apply[F[_], A]: PartiallyApplied[F, A] =
-      new PartiallyApplied[F, A]
-
-    final class PartiallyApplied[F[_], A]() {
-      def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
-          connectionUri: String,
-          table: Table,
-          sink: ResultSink.UpsertSink[F, ColumnType.Scalar, Byte],
-          idColumn: Column[ColumnType.Scalar],
-          writeMode: QWriteMode,
-          records: Stream[F, UpsertEvent[R]])(
-          implicit
-          async: Async[F],
-          cshift: ContextShift[F],
-          read: Read[A],
-          keys: Keys.Aux[R, K],
-          values: Values.Aux[R, V],
-          getTypes: Mapper.Aux[asColumnType.type, V, T],
-          rrow: Mapper.Aux[renderRow.type, V, S],
-          ktl: ToList[K, String],
-          vtl: ToList[S, String],
-          ttl: ToList[T, ColumnType.Scalar])
-          : F[(List[A], List[OffsetKey.Actual[String]])] =
+  object Consumer {
+    def upsert[A](cfg: Json, connectionUri: String): Resource[IO, Consumer[A]] = {
+      val rsink: Resource[IO, ResultSink.UpsertSink[IO, ColumnType.Scalar, Byte]] =
+        DM.destination[IO](cfg, _ => _ => Stream.empty) evalMap {
+          case Left(err) =>
+            IO.raiseError(new RuntimeException(err.shows))
+          case Right(dst) =>
+            val optSink = dst.sinks.toList.collectFirst { case c @ ResultSink.UpsertSink(_) => c }
+            optSink match {
+              case Some(s) => s.asInstanceOf[ResultSink.UpsertSink[IO, ColumnType.Scalar, Byte]].pure[IO]
+              case None => IO.raiseError(new RuntimeException("No upsert sink found"))
+            }
+        }
+      rsink map { sink => new Consumer[A] {
+        def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+            table: Table,
+            idColumn: Option[Column[ColumnType.Scalar]],
+            writeMode: QWriteMode,
+            records: Stream[IO, UpsertEvent[R]])(
+            implicit
+            read: Read[A],
+            keys: Keys.Aux[R, K],
+            values: Values.Aux[R, V],
+            getTypes: Mapper.Aux[asColumnType.type, V, T],
+            rrow: Mapper.Aux[renderRow.type, V, S],
+            ktl: ToList[K, String],
+            vtl: ToList[S, String],
+            ttl: ToList[T, ColumnType.Scalar])
+            : IO[(List[A], List[OffsetKey.Actual[String]])] =
         for {
           tableColumns <- columnsOf(records, renderRow, idColumn).compile.lastOrError
 
-          colList = (idColumn :: tableColumns).map(k =>
+          colList = (idColumn.get :: tableColumns).map(k =>
             Fragment.const(hygienicIdent(k.name))).intercalate(fr",")
 
           dst = ResourcePath.root() / ResourceName(table)
 
           offsets <- toUpsertCsvSink(
+            dst, sink, idColumn.get, writeMode, renderRow, records).compile.toList
+
+          q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
+
+          rows <- runDb[IO, List[A]](q.query[A].to[List], connectionUri)
+
+        } yield (rows, offsets)
+      }}
+    }
+
+    def append[A](cfg: Json, connectionUri: String): Resource[IO, Consumer[A]] = {
+      val rsink: Resource[IO, ResultSink.AppendSink[IO, ColumnType.Scalar]] =
+        DM.destination[IO](cfg, _ => _ => Stream.empty) evalMap {
+          case Left(err) =>
+            IO.raiseError(new RuntimeException(err.shows))
+          case Right(dst) =>
+            val optSink = dst.sinks.toList.collectFirst { case c @ ResultSink.AppendSink(_) => c }
+            optSink match {
+              case Some(s) => s.asInstanceOf[ResultSink.AppendSink[IO, ColumnType.Scalar]].pure[IO]
+              case None => IO.raiseError(new RuntimeException("No append sink found"))
+            }
+        }
+      rsink map { sink => new Consumer[A] {
+        def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+            table: Table,
+            idColumn: Option[Column[ColumnType.Scalar]],
+            writeMode: QWriteMode,
+            records: Stream[IO, UpsertEvent[R]])(
+            implicit
+            read: Read[A],
+            keys: Keys.Aux[R, K],
+            values: Values.Aux[R, V],
+            getTypes: Mapper.Aux[asColumnType.type, V, T],
+            rrow: Mapper.Aux[renderRow.type, V, S],
+            ktl: ToList[K, String],
+            vtl: ToList[S, String],
+            ttl: ToList[T, ColumnType.Scalar])
+            : IO[(List[A], List[OffsetKey.Actual[String]])] =
+        for {
+          tableColumns <- columnsOf(records, renderRow, idColumn).compile.lastOrError
+
+          colList = (idColumn.toList ++ tableColumns).map(k =>
+            Fragment.const(hygienicIdent(k.name))).intercalate(fr",")
+
+          dst = ResourcePath.root() / ResourceName(table)
+
+          offsets <- toAppendCsvSink(
             dst, sink, idColumn, writeMode, renderRow, records).compile.toList
 
           q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
 
-          rows <- runDb[F, List[A]](q.query[A].to[List], connectionUri)
+          rows <- runDb[IO, List[A]](q.query[A].to[List], connectionUri)
 
         } yield (rows, offsets)
+      }
+    }}
+  }
+
+  object appendAndUpsert {
+    def apply[A]: PartiallyApplied[A] = new PartiallyApplied[A]
+
+    final class PartiallyApplied[A] {
+      type MkOption = Column[ColumnType.Scalar] => Option[Column[ColumnType.Scalar]]
+      def apply[R: AsResult](
+          f: (MkOption, Consumer[A]) => IO[R])
+          : SFragment = {
+        "upsert" >>* Consumer.upsert[A](config(), TestConnectionUrl).use(f(Some(_), _))
+        "append" >>* Consumer.append[A](config(), TestConnectionUrl).use(f(Some(_), _))
+        "no-id" >>* Consumer.append[A](config(), TestConnectionUrl).use(f(x => None, _))
+      }
+    }
+  }
+
+  object idOnly {
+    def apply[A]: PartiallyApplied[A] = new PartiallyApplied[A]
+
+    final class PartiallyApplied[A] {
+      type MkOption = Column[ColumnType.Scalar] => Option[Column[ColumnType.Scalar]]
+      def apply[R: AsResult](
+          f: (MkOption, Consumer[A]) => IO[R])
+          : SFragment = {
+        "upsert" >>* Consumer.upsert[A](config(), TestConnectionUrl).use(f(Some(_), _))
+        "append" >>* Consumer.append[A](config(), TestConnectionUrl).use(f(Some(_), _))
+      }
     }
   }
 

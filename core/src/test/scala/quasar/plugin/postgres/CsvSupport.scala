@@ -25,6 +25,7 @@ import cats.implicits._
 
 import com.github.tototoshi.csv._
 
+import cats.implicits._
 import fs2._
 
 import java.io.ByteArrayOutputStream
@@ -33,8 +34,8 @@ import java.time._
 import qdata.time._
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource.ResourcePath
-import quasar.api.push.OffsetKey
-import quasar.connector.{IdBatch, DataEvent}
+import quasar.api.push.{PushColumns, OffsetKey}
+import quasar.connector.{AppendEvent, IdBatch, DataEvent}
 import quasar.connector.destination.ResultSink
 import quasar.connector.render.RenderConfig
 import quasar.connector.destination.{ResultSink, WriteMode => QWriteMode}
@@ -109,7 +110,7 @@ trait CsvSupport {
     F[_]: Async, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
     events: Stream[F, UpsertEvent[R]],
     renderRow: P,
-    idColumn: Column[ColumnType.Scalar])(
+    idColumn: Option[Column[ColumnType.Scalar]])(
     implicit
     keys: Keys.Aux[R, K],
     values: Values.Aux[R, V],
@@ -126,7 +127,7 @@ trait CsvSupport {
 
             val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
 
-            Pull.output1(columns.filter(c => c =!= idColumn))
+            Pull.output1(columns.filter(c => c.some =!= idColumn))
 
           case _ => Pull.done
         }
@@ -135,6 +136,53 @@ trait CsvSupport {
     }
 
     go.stream
+  }
+
+  def toAppendCsvSink[F[_]: Async, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
+      dst: ResourcePath,
+      sink: ResultSink.AppendSink[F, ColumnType.Scalar],
+      idColumn: Option[Column[ColumnType.Scalar]],
+      writeMode: QWriteMode,
+      renderRow: P,
+      events: Stream[F, UpsertEvent[R]])(
+      implicit
+      keys: Keys.Aux[R, K],
+      values: Values.Aux[R, V],
+      getTypes: Mapper.Aux[asColumnType.type, V, T],
+      renderValues: Mapper.Aux[renderRow.type, V, S],
+      ktl: ToList[K, String],
+      stl: ToList[S, String],
+      ttl: ToList[T, ColumnType.Scalar])
+      : Stream[F, OffsetKey.Actual[String]] = {
+
+    val encoded: Stream[F, AppendEvent[Byte, OffsetKey.Actual[String]]] = events flatMap {
+      case UpsertEvent.Create(records) => {
+        Stream.emits(records)
+          .covary[F]
+          .through(
+            encodeCsvRecordsToChunk[F, renderRow.type, R, V, S](renderRow))
+          .map(DataEvent.Create(_))
+      }
+
+      case UpsertEvent.Commit(s) =>
+        Stream(
+          DataEvent.Commit(OffsetKey.Actual.string(s)))
+
+      case UpsertEvent.Delete(_) =>
+        Stream.eval_(Async[F].raiseError(new Exception("AppendSink can't handle delete events")))
+    }
+
+    type Consumed = ResultSink.AppendSink.Result[F] { type A = Byte }
+    for {
+      colList <- columnsOf(events, renderRow, idColumn)
+      cols = idColumn match {
+        case None => PushColumns.NoPrimary(NonEmptyList.fromListUnsafe(colList))
+        case Some(i) => PushColumns.HasPrimary(List(), i, colList)
+      }
+      consumed = sink.consume.apply(
+        ResultSink.AppendSink.Args(dst, cols, writeMode))
+      res <- encoded.through(consumed.asInstanceOf[Consumed].pipe[String])
+    } yield res
   }
 
   def toUpsertCsvSink[F[_]: Async, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
@@ -176,7 +224,7 @@ trait CsvSupport {
           DataEvent.Delete(IdBatch.Longs(is.toArray, is.length)))
     }
 
-    columnsOf(events, renderRow, idColumn) flatMap { cols =>
+    columnsOf(events, renderRow, Some(idColumn)) flatMap { cols =>
       val (_, pipe) = sink.consume.apply(
         ResultSink.UpsertSink.Args(dst, idColumn, cols, writeMode))
 
