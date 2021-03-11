@@ -123,6 +123,14 @@ package object postgres {
       .run
   }
 
+  def insertInto(log: Logger)(from: Table, target: Table): ConnectionIO[Int] =
+    (fr"INSERT INTO" ++
+      Fragment.const(hygienicIdent(target)) ++
+      fr"SELECT * FROM" ++
+      Fragment.const(hygienicIdent(from)))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
   def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] = {
     val idxName = s"precog_id_idx_$table"
 
@@ -133,6 +141,15 @@ package object postgres {
       .updateWithLogHandler(logHandler(log))
       .run
   }
+
+  def checkExists(log: Logger)(table: Table, schema: Option[Ident]): ConnectionIO[Option[Int]] =
+    (fr"SELECT count(*) as exists_flag FROM information_schema.tables where table_name =" ++
+      Fragment.const(hygienicIdent(table)) ++
+      (schema.map(s =>
+        fr" and schema_name =" ++ Fragment.const(hygienicIdent(table)))
+        .getOrElse(fr0"")))
+      .queryWithLogHandler[Int](logHandler(log))
+      .option
 
   def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
     (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))

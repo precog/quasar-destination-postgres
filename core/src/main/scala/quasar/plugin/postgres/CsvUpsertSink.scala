@@ -145,7 +145,7 @@ object CsvUpsertSink extends Logging {
               Fragments.in(preamble, NonEmptyVector.fromVectorUnsafe(values.take(size).toVector)) // trust size passed by quasar
                 .updateWithLogHandler(logHandler(log))
                 .run
-        }
+          }
 
         for {
           tbl <- toConnectionIO(table)
