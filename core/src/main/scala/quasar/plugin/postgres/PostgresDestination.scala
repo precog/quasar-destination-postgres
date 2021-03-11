@@ -16,6 +16,8 @@
 
 package quasar.plugin.postgres
 
+import scala._, Predef._
+
 import cats.data.NonEmptyList
 import cats.effect.{Effect, Timer}
 
@@ -27,7 +29,8 @@ import quasar.connector.destination._
 
 final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     xa: Transactor[F],
-    writeMode: WriteMode)
+    writeMode: WriteMode,
+    schema: Option[String])
     extends LegacyDestination[F] {
 
   val destinationType: DestinationType =
@@ -35,7 +38,7 @@ final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
 
   val sinks: NonEmptyList[ResultSink[F, Type]] =
     NonEmptyList.of(
-      ResultSink.create(CsvCreateSink(xa, writeMode)),
+      ResultSink.create(CsvCreateSink(xa, writeMode, schema)),
       ResultSink.upsert(CsvUpsertSink(xa, writeMode)),
       ResultSink.append(CsvAppendSink(xa, writeMode)))
 }
