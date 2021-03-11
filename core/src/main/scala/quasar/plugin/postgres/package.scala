@@ -143,10 +143,10 @@ package object postgres {
   }
 
   def checkExists(log: Logger)(table: Table, schema: Option[Ident]): ConnectionIO[Option[Int]] =
-    (fr"SELECT count(*) as exists_flag FROM information_schema.tables where table_name =" ++
-      Fragment.const(hygienicIdent(table)) ++
+    (fr0"SELECT count(*) as exists_flag FROM information_schema.tables WHERE table_name ='" ++
+      Fragment.const0(table) ++ fr0"'" ++
       (schema.map(s =>
-        fr" and schema_name =" ++ Fragment.const(hygienicIdent(table)))
+        fr0" AND schema_name ='" ++ Fragment.const(hygienicIdent(s)) ++ fr0"'")
         .getOrElse(fr0"")))
       .queryWithLogHandler[Int](logHandler(log))
       .option

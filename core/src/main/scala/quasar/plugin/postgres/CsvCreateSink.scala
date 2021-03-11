@@ -97,10 +97,10 @@ object CsvCreateSink extends Logging {
           case WriteMode.Create =>
             checkExists(log)(tbl, schema) flatMap { result =>
               if (result.exists(_ == 1))
-                0.pure[ConnectionIO]
-              else
                 Sync[ConnectionIO].raiseError(
-                  new RuntimeException(s"write mode set to create but table $tbl at schema $schema already exists")): ConnectionIO[Int]
+                  new TableAlreadyExists(tbl, schema)): ConnectionIO[Int]
+              else
+                0.pure[ConnectionIO]
             }
           case _ =>
             0.pure[ConnectionIO]

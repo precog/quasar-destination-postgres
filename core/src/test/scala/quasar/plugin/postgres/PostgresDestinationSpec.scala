@@ -443,8 +443,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       ("foo" ->> 2) :: ("bar" ->> "baz2") :: ("quux" ->> 35.34234) :: HNil,
       ("foo" ->> 3) :: ("bar" ->> "baz3") :: ("quux" ->> 36.34234) :: HNil)
 
-    "overwrite any existing table with the same name" >>* {
-      csv(config()) { sink =>
+    "overwrite any existing table with the same name with WriteMode.Replace" >>* {
+      csv(config(writeMode = WriteMode.Replace)) { sink =>
         val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
         val r2 = ("a" ->> "b") :: ("c" ->> "d") :: HNil
 
@@ -454,6 +454,61 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           res2 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r2))
         } yield (res1 must_=== List(r1)) and (res2 must_=== List(r2))
       }
+    }
+
+    "overwrite any existing table with the same name with WriteMode.Truncate" >>* {
+      csv(config(writeMode = WriteMode.Truncate)) { sink =>
+        val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
+        val r2 = ("x" ->> 2) :: ("y" ->> "skldfj") :: ("z" ->> 3.00002) :: HNil
+
+        for {
+          tbl <- freshTableName
+          res1 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1))
+          res2 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r2))
+        } yield (res1 must_=== List(r1)) and (res2 must_=== List(r2))
+      }
+    }
+
+    "append to existing table with WriteMode.Append" >>* {
+      csv(config(writeMode = WriteMode.Append)) { sink =>
+        val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
+        val r2 = ("x" ->> 2) :: ("y" ->> "skldfj") :: ("z" ->> 3.00002) :: HNil
+
+        for {
+          tbl <- freshTableName
+          res1 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1))
+          res2 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r2))
+        } yield (res1 must_=== List(r1)) and (res2 must_=== List(r1) ++ List(r2))
+      }
+    }
+
+    "create new table with WriteMode.Create" >>* {
+      csv(config(writeMode = WriteMode.Create)) { sink =>
+        val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
+
+        for {
+          tbl <- freshTableName
+          res1 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1))
+        } yield (res1 must_=== List(r1))
+      }
+    }
+
+    "error when table already exists with WriteMode.Create" >>* {
+      val action = csv(config(writeMode = WriteMode.Create)) { sink =>
+        val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
+        val r2 = ("a" ->> "b") :: ("c" ->> "d") :: HNil
+
+        for {
+          tbl <- freshTableName
+          _ <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1))
+          res2 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r2))
+        } yield ()
+      }
+      action
+        .attempt
+        .map(_ must beLeft.like {
+          case TableAlreadyExists(_, _) => ok
+        })
     }
 
     "roundtrip Boolean" >>* mustRoundtrip(("min" ->> true) :: ("max" ->> false) :: HNil)
@@ -559,10 +614,10 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   def runDb[F[_]: Async: ContextShift, A](fa: ConnectionIO[A], uri: String = TestConnectionUrl): F[A] =
     fa.transact(Transactor.fromDriverManager[F]("org.postgresql.Driver", jdbcUri(new URI(uri))))
 
-  def config(url: String = TestConnectionUrl, schema: Option[String] = None): Json =
+  def config(url: String = TestConnectionUrl, schema: Option[String] = None, writeMode: WriteMode = WriteMode.Replace): Json =
     ("connectionUri" := url) ->:
     ("schema" := schema) ->:
-    ("writeMode" := jNull) ->:
+    ("writeMode" := writeMode) ->:
     jEmptyObject
 
   def csv[A](cfg: Json)(f: ResultSink.CreateSink[IO, ColumnType.Scalar, Byte] => IO[A]): IO[A] =
