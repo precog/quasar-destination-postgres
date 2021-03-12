@@ -142,14 +142,20 @@ package object postgres {
       .run
   }
 
-  def checkExists(log: Logger)(table: Table, schema: Option[Ident]): ConnectionIO[Option[Int]] =
-    (fr0"SELECT count(*) as exists_flag FROM information_schema.tables WHERE table_name ='" ++
-      Fragment.const0(table) ++ fr0"'" ++
-      (schema.map(s =>
-        fr0" AND schema_name ='" ++ Fragment.const(hygienicIdent(s)) ++ fr0"'")
-        .getOrElse(fr0"")))
-      .queryWithLogHandler[Int](logHandler(log))
+  def checkExists(log: Logger)(table: Table, schema: Option[Ident]): ConnectionIO[Option[Int]] = {
+    val f = (fr0"SELECT count(*) as exists_flag FROM information_schema.tables WHERE table_name ='" ++
+      Fragment.const0(table) ++
+      fr0"'" ++
+      fr0" AND table_schema =" ++
+      (schema
+        .map(s => fr0"'" ++ Fragment.const0(s) ++ fr0"'")
+        .getOrElse(fr0"'public'")))
+
+    println(s"frag: $f")
+
+      f.queryWithLogHandler[Int](logHandler(log))
       .option
+  }
 
   def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
     (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))

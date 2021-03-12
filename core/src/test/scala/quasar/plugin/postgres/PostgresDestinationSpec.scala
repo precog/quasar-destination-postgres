@@ -493,7 +493,20 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
-    "error when table already exists with WriteMode.Create" >>* {
+    "create new table in user-defined schema with WriteMode.Create" >>* {
+      val schema = "myschema"
+
+      csv(config(schema = Some(schema), writeMode = WriteMode.Create)) { sink =>
+        val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
+
+        for {
+          tbl <- freshTableName
+          res1 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1), schema)
+        } yield (res1 must_=== List(r1))
+      }
+    }
+
+    "error when table already exists in public schema with WriteMode.Create" >>* {
       val action = csv(config(writeMode = WriteMode.Create)) { sink =>
         val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
         val r2 = ("a" ->> "b") :: ("c" ->> "d") :: HNil
@@ -502,6 +515,27 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           tbl <- freshTableName
           _ <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1))
           res2 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r2))
+        } yield ()
+      }
+
+      action
+        .attempt
+        .map(_ must beLeft.like {
+          case TableAlreadyExists(_, _) => ok
+        })
+    }
+
+    "error when table already exists in user-provided schema with WriteMode.Create" >>* {
+      val schema = "myschema"
+
+      val action = csv(config(schema = Some(schema), writeMode = WriteMode.Create)) { sink =>
+        val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
+        val r2 = ("a" ->> "b") :: ("c" ->> "d") :: HNil
+
+        for {
+          tbl <- freshTableName
+          _ <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1), schema)
+          res2 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r2), schema)
         } yield ()
       }
 
@@ -807,7 +841,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       connectionUri: String,
       table: Table,
       sink: ResultSink.CreateSink[F, ColumnType.Scalar, Byte],
-      records: Stream[F, R])(
+      records: Stream[F, R],
+      schema: String = "public")(
       implicit
       keys: Keys.Aux[R, K],
       values: Values.Aux[R, V],
@@ -818,7 +853,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       vtl: ToList[S, String],
       ttl: ToList[T, ColumnType.Scalar])
       : F[List[V]] =
-    drainAndSelectAs[F, V](connectionUri, table, sink, records)
+    drainAndSelectAs[F, V](connectionUri, table, sink, records, schema)
 
   object drainAndSelectAs {
     def apply[F[_], A]: PartiallyApplied[F, A] =
@@ -829,7 +864,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
           connectionUri: String,
           table: Table,
           sink: ResultSink.CreateSink[F, ColumnType.Scalar, Byte],
-          records: Stream[F, R])(
+          records: Stream[F, R],
+          schema: String = "public")(
           implicit
           async: Async[F],
           cshift: ContextShift[F],
@@ -852,9 +888,20 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
                 .map(k => Fragment.const(hygienicIdent(k)))
                 .intercalate(fr",")
 
-            val q = fr"SELECT" ++ colList ++ fr"FROM" ++ Fragment.const(hygienicIdent(table))
+            val createSchema = fr"CREATE SCHEMA IF NOT EXISTS" ++
+              Fragment.const(hygienicIdent(schema)) ++
+              fr"AUTHORIZATION" ++
+              Fragment.const("postgres")
+
+            val q = fr"SELECT" ++
+              colList ++
+              fr"FROM" ++
+              Fragment.const(hygienicIdent(schema)) ++
+              fr0"." ++
+              Fragment.const(hygienicIdent(table))
 
             val run = for {
+              _ <- runDb[F, Int](createSchema.update.run, connectionUri)
               _ <- toCsvSink(dst, sink, renderRow, rs).compile.drain
               rows <- runDb[F, List[A]](q.query[A].to[List], connectionUri)
             } yield rows
