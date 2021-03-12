@@ -131,6 +131,33 @@ package object postgres {
       .updateWithLogHandler(logHandler(log))
       .run
 
+  def renameTable(log: Logger)(from: Table, target: Table): ConnectionIO[Int] =
+    (fr"ALTER TABLE" ++
+      Fragment.const(hygienicIdent(from)) ++
+      fr"RENAME TO" ++
+      Fragment.const(hygienicIdent(target)))
+      .updateWithLogHandler(logHandler(log))
+      .run
+
+  def updateTable(log: Logger)(
+      writeMode: WriteMode,
+      colSpecs: NonEmptyList[Fragment],
+      from: Table,
+      target: Table) =
+    writeMode match {
+       case WriteMode.Create =>
+         createTable(log)(target, colSpecs) >> insertInto(log)(from, target)
+
+       case WriteMode.Replace =>
+         dropTableIfExists(log)(target) >> renameTable(log)(from, target)
+
+       case WriteMode.Truncate =>
+         createTableIfNotExists(log)(target, colSpecs) >> truncateTable(log)(target) >> insertInto(log)(from, target)
+
+       case WriteMode.Append =>
+         createTableIfNotExists(log)(target, colSpecs) >> insertInto(log)(from, target)
+    }
+
   def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] = {
     val idxName = s"precog_id_idx_$table"
 
@@ -162,7 +189,6 @@ package object postgres {
     (fr"TRUNCATE" ++ Fragment.const(hygienicIdent(table)))
       .updateWithLogHandler(logHandler(log))
       .run
-
 
   /** Returns the JDBC connection string corresponding to the given postgres URI. */
   def jdbcUri(pgUri: URI): String =

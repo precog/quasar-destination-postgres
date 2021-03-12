@@ -106,21 +106,6 @@ object CsvCreateSink extends Logging {
             0.pure[ConnectionIO]
         }
 
-      ensureTable =
-        writeMode match {
-          case WriteMode.Create =>
-            createTable(log)(tbl, colSpecs)
-
-          case WriteMode.Replace =>
-            dropTableIfExists(log)(tbl) >> createTable(log)(tbl, colSpecs)
-
-          case WriteMode.Truncate =>
-            createTableIfNotExists(log)(tbl, colSpecs) >> truncateTable(log)(tbl)
-
-          case WriteMode.Append =>
-            createTableIfNotExists(log)(tbl, colSpecs)
-        }
-
       ensureTempTable =
         dropTableIfExists(log)(tempTbl) >> createTable(log)(tempTbl, colSpecs)
 
@@ -128,8 +113,7 @@ object CsvCreateSink extends Logging {
         Stream.eval(verifyExistence).void ++
           Stream.eval(ensureTempTable).void ++
           doCopyToTemp.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_))) ++
-          Stream.eval(ensureTable).void ++
-          Stream.eval(insertInto(log)(tempTbl, tbl)).void ++
+          Stream.eval(updateTable(log)(writeMode, colSpecs, tempTbl, tbl)).void ++
           Stream.eval(dropTableIfExists(log)(tempTbl)).void
 
       copy = copy0.transact(xa) handleErrorWith { t =>
