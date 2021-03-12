@@ -42,7 +42,7 @@ object WriteMode {
         case "create" => DecodeResult.ok(Create)
         case "replace" => DecodeResult.ok(Replace)
         case "truncate" => DecodeResult.ok(Truncate)
-        case "append" => DecodeResult.ok(Truncate)
+        case "append" => DecodeResult.ok(Append)
         case _ => DecodeResult.fail("Valid write modes are 'create', 'truncate', 'append' and 'replace'", c.history)
       })
 
