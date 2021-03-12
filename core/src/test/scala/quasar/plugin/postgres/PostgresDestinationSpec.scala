@@ -353,6 +353,21 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   }
 
   "csv sink" should {
+
+    "append to existing table with WriteMode.Append" >>* {
+      csv(config(writeMode = WriteMode.Append)) { sink =>
+        val r1 = ("x" ->> 1) :: ("y" ->> "two") :: ("z" ->> 3.00001) :: HNil
+        val r2 = ("x" ->> 2) :: ("y" ->> "skldfj") :: ("z" ->> 3.00002) :: HNil
+
+        for {
+          tbl <- freshTableName
+          _ = println(s"table name: $tbl")
+          res1 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r1))
+          res2 <- drainAndSelect(TestConnectionUrl, tbl, sink, Stream(r2))
+        } yield (res1 must_=== List(r1)) and (res2 must_=== List(r1) ++ List(r2))
+      }
+    }
+
     "reject empty paths with NotAResource" >>* {
       csv(config()) { sink =>
         val p = ResourcePath.root()
@@ -559,10 +574,10 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   def runDb[F[_]: Async: ContextShift, A](fa: ConnectionIO[A], uri: String = TestConnectionUrl): F[A] =
     fa.transact(Transactor.fromDriverManager[F]("org.postgresql.Driver", jdbcUri(new URI(uri))))
 
-  def config(url: String = TestConnectionUrl, schema: Option[String] = None): Json =
+  def config(url: String = TestConnectionUrl, schema: Option[String] = None, writeMode: WriteMode = WriteMode.Replace): Json =
     ("connectionUri" := url) ->:
     ("schema" := schema) ->:
-    ("writeMode" := jNull) ->:
+    ("writeMode" := writeMode) ->:
     jEmptyObject
 
   def csv[A](cfg: Json)(f: ResultSink.CreateSink[IO, ColumnType.Scalar, Byte] => IO[A]): IO[A] =
