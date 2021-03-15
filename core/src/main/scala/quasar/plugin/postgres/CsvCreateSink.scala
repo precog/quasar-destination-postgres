@@ -21,7 +21,7 @@ import slamdata.Predef._
 import cats._
 import cats.arrow.FunctionK
 import cats.data._
-import cats.effect.{Effect, ExitCase, LiftIO, Timer}
+import cats.effect.{Effect, ExitCase, LiftIO, Sync, Timer}
 import cats.effect.concurrent.Ref
 import cats.implicits._
 
@@ -44,7 +44,8 @@ import scala.concurrent.duration.MILLISECONDS
 object CsvCreateSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
       xa: Transactor[F],
-      writeMode: WriteMode)(
+      writeMode: WriteMode,
+      schema: Option[String])(
       dst: ResourcePath,
       columns: NonEmptyList[Column[ColumnType.Scalar]])(
       implicit timer: Timer[F])
@@ -77,36 +78,43 @@ object CsvCreateSink extends Logging {
       totalBytes <- Ref[F].of(0L)
       startAt <- timer.clock.monotonic(MILLISECONDS)
 
-      doCopy =
+      tempTbl = "precog_temp_" + tbl
+
+      doCopyToTemp =
         data
           .chunks
           .evalTap(recordChunks[F](totalBytes, log))
           // TODO: Is there a better way?
           .translate(Effect.toIOK[F] andThen LiftIO.liftK[CopyManagerIO])
-          .through(copyToTable(tbl, columns))
+          .through(copyToTable(tempTbl, columns))
 
       colSpecs <- columns.traverse(columnSpec).fold(
         invalid => AE.raiseError(new ColumnTypesNotSupported(invalid)),
         _.pure[F])
 
-      ensureTable =
+      verifyExistence =
         writeMode match {
           case WriteMode.Create =>
-            createTable(log)(tbl, colSpecs)
-
-          case WriteMode.Replace =>
-            dropTableIfExists(log)(tbl) >> createTable(log)(tbl, colSpecs)
-
-          case WriteMode.Truncate =>
-            createTableIfNotExists(log)(tbl, colSpecs) >> truncateTable(log)(tbl)
-
-          case WriteMode.Append =>
-            createTableIfNotExists(log)(tbl, colSpecs)
+            checkExists(log)(tbl, schema) flatMap { result =>
+              if (result.exists(_ == 1))
+                Sync[ConnectionIO].raiseError(
+                  new TableAlreadyExists(tbl, schema)): ConnectionIO[Int]
+              else
+                0.pure[ConnectionIO]
+            }
+          case _ =>
+            0.pure[ConnectionIO]
         }
 
+      ensureTempTable =
+        dropTableIfExists(log)(tempTbl) >> createTable(log)(tempTbl, colSpecs)
+
       copy0 =
-        Stream.eval(ensureTable).void ++
-          doCopy.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_)))
+        Stream.eval(verifyExistence).void ++
+          Stream.eval(ensureTempTable).void ++
+          doCopyToTemp.translate(λ[FunctionK[CopyManagerIO, ConnectionIO]](PHC.pgGetCopyAPI(_))) ++
+          Stream.eval(updateTable(log)(writeMode, colSpecs, tempTbl, tbl)).void ++
+          Stream.eval(dropTableIfExists(log)(tempTbl)).void
 
       copy = copy0.transact(xa) handleErrorWith { t =>
         Stream.eval(
