@@ -23,6 +23,7 @@ import quasar.api.resource.ResourcePath
 import quasar.api.{Column, ColumnType}
 import quasar.connector.destination.{WriteMode => QWriteMode}
 import quasar.connector.{MonadResourceErr, ResourceError}
+import quasar.lib.jdbc.destination.WriteMode
 
 import org.slf4s.Logging
 

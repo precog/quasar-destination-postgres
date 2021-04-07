@@ -18,27 +18,55 @@ package quasar.plugin.postgres
 
 import scala._, Predef._
 
+import cats.{~>, MonadError}
 import cats.data.NonEmptyList
 import cats.effect.{Effect, Timer}
+import cats.implicits._
 
-import doobie.Transactor
+import doobie.{ConnectionIO, Transactor}
+import doobie.implicits._
+import doobie.free.connection.rollback
 
 import quasar.api.destination._
 import quasar.connector.MonadResourceErr
 import quasar.connector.destination._
+import quasar.lib.jdbc.destination.WriteMode
+
+import org.slf4s.Logger
+
+import scala.concurrent.duration._
 
 final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     xa: Transactor[F],
     writeMode: WriteMode,
-    schema: Option[String])
+    schema: Option[String],
+    logger: Logger)
     extends LegacyDestination[F] {
 
   val destinationType: DestinationType =
     PostgresDestinationModule.destinationType
 
+  val retry = PostgresDestination.retryN(10, 60.seconds, 0)
+
   val sinks: NonEmptyList[ResultSink[F, Type]] =
     NonEmptyList.of(
       ResultSink.create(CsvCreateSink(xa, writeMode, schema)),
-      ResultSink.upsert(CsvUpsertSink(xa, writeMode)),
-      ResultSink.append(CsvAppendSink(xa, writeMode)))
+      ResultSink.upsert(SinkBuilder.upsert(xa, writeMode, schema, retry, logger)),
+      ResultSink.append(SinkBuilder.append(xa, writeMode, schema, retry, logger)))
 }
+
+object PostgresDestination {
+  private def retryN[F[_]: Effect: Timer](maxN: Int, timeout: FiniteDuration, n: Int): ConnectionIO ~> ConnectionIO =
+    λ[ConnectionIO ~> ConnectionIO] { action =>
+      action.attempt flatMap {
+        case Right(a) => a.pure[ConnectionIO]
+        case Left(e) if n < maxN =>
+          rollback >>
+          toConnectionIO[F].apply(Timer[F].sleep(timeout)) >>
+          retryN[F](maxN, timeout, n + 1).apply(action)
+        case Left(e) => MonadError[ConnectionIO, Throwable].raiseError(e)
+      }
+    }
+}
+
+

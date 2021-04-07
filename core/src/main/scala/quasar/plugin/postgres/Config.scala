@@ -24,6 +24,8 @@ import cats.implicits._
 
 import java.net.URI
 
+import quasar.lib.jdbc.destination.WriteMode
+
 import scala.util.control.NonFatal
 
 final case class Config(connectionUri: URI, schema: Option[String], writeMode: Option[WriteMode]) {

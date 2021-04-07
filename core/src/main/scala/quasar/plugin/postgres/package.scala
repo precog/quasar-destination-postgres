@@ -18,7 +18,7 @@ package quasar.plugin
 
 import slamdata.Predef._
 
-import cats.effect.Sync
+import cats.effect.{Sync, Effect, LiftIO}
 import cats.effect.concurrent.Ref
 import cats.ApplicativeError
 import cats.data.{NonEmptyList, ValidatedNel}
@@ -31,6 +31,7 @@ import java.time.temporal.ChronoField
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource._
 import quasar.connector.render.RenderConfig
+import quasar.lib.jdbc.destination.WriteMode
 
 import scala.util.Random
 
@@ -232,6 +233,7 @@ package object postgres {
       ValidatedNel[ColumnType.Scalar, Fragment] =
     pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
 
+  def toConnectionIO[F[_]: Effect] = Effect.toIOK[F] andThen LiftIO.liftK[ConnectionIO]
   ////
 
   private def logChunkSize[F[_]: Sync](c: Chunk[Byte], log: Logger): F[Unit] =

@@ -25,6 +25,7 @@ import quasar.connector.destination.ResultSink.AppendSink
 import quasar.connector.destination.{WriteMode => QWriteMode}
 import quasar.connector.render.RenderConfig
 import quasar.connector.{AppendEvent, DataEvent, MonadResourceErr}
+import quasar.lib.jdbc.destination.WriteMode
 
 import org.slf4s.Logging
 

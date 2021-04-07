@@ -48,6 +48,7 @@ import quasar.api.resource._
 import quasar.contrib.scalaz.MonadError_
 import quasar.connector._
 import quasar.connector.destination.{WriteMode => QWriteMode, _}
+import quasar.lib.jdbc.destination.WriteMode
 
 import scala.Float
 import scala.concurrent.ExecutionContext.Implicits.global
@@ -111,7 +112,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             "baz" :: "qux" :: HNil)
         }
     }
-
+  }
+  /*
     "write two chunks with a single commit" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
       val events =
         Stream(
@@ -573,12 +575,14 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       ("min" ->> B.MinLocalTime) ::
       ("max" ->> B.MaxLocalTime) ::
       HNil)
+    */
 /*  TODO: Figure out how to represent this through the PG driver
     "roundtrip OffsetTime" >>* mustRoundtrip(
       ("min" ->> B.MinOffsetTime) ::
       ("max" ->> B.MaxOffsetTime) ::
       HNil)
 */
+/*
     "load LocalDate bounds" >>* {
       loadAndRetrieve(("min" ->> B.MinLocalDate) :: ("max" ->> B.MaxLocalDate) :: HNil)
         .map(_ must not(beEmpty))
@@ -628,11 +632,13 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       ("zero" ->> DateTimeInterval.zero) ::
       ("pos" ->> DateTimeInterval.make(3, 1, 14, 600, 342000)) ::
       HNil)
-  }
+
+    */
+  //}
 
   val DM = PostgresDestinationModule
 
-  val TestConnectionUrl: String = "postgresql://localhost:54322/postgres?user=postgres&password=postgres"
+  val TestConnectionUrl: String = "postgresql://localhost:5433/postgres?user=postgres&password=secret"
 
   implicit val CS: ContextShift[IO] = IO.contextShift(global)
 
