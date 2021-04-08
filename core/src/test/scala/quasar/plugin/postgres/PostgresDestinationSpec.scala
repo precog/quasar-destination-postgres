@@ -112,8 +112,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             "baz" :: "qux" :: HNil)
         }
     }
-  }
-  /*
+
     "write two chunks with a single commit" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
       val events =
         Stream(
@@ -171,7 +170,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             OffsetKey.Actual.string("commit2"))
         }
     }
-
+/*
     "upsert delete rows with string typed primary key" >>* {
       Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
@@ -219,6 +218,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         }
       }
     }
+    */
 
     "upsert empty deletes without failing" >>* {
       Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
@@ -247,6 +247,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       }
     }
 
+    /*
     "upsert delete same id twice" >>* {
       Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
@@ -274,6 +275,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         }
       }
     }
+    */
 
     "creates table and then appends" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
       val events1 =
@@ -401,7 +403,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         drainAndSelect(
           TestConnectionUrl,
-          "foobar; drop table really_important; create table haha",
+          "foobar; drop table really_important; eate table haha",
           sink,
           Stream.emits(recs)
         ).map(_ must_=== recs)
@@ -523,7 +525,9 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       action
         .attempt
         .map(_ must beLeft.like {
-          case TableAlreadyExists(_, _) => ok
+          case ResourceError.throwableP(ResourceError.AccessDenied(_, _, _)) =>
+            ok
+          //case TableAlreadyExists(_, _) => ok
         })
     }
 
@@ -544,7 +548,9 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       action
         .attempt
         .map(_ must beLeft.like {
-          case TableAlreadyExists(_, _) => ok
+          case ResourceError.throwableP(ResourceError.AccessDenied(_, _, _)) =>
+            ok
+          //case TableAlreadyExists(_, _) => ok
         })
     }
 
@@ -575,14 +581,14 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       ("min" ->> B.MinLocalTime) ::
       ("max" ->> B.MaxLocalTime) ::
       HNil)
-    */
+
 /*  TODO: Figure out how to represent this through the PG driver
     "roundtrip OffsetTime" >>* mustRoundtrip(
       ("min" ->> B.MinOffsetTime) ::
       ("max" ->> B.MaxOffsetTime) ::
       HNil)
 */
-/*
+
     "load LocalDate bounds" >>* {
       loadAndRetrieve(("min" ->> B.MinLocalDate) :: ("max" ->> B.MaxLocalDate) :: HNil)
         .map(_ must not(beEmpty))
@@ -633,8 +639,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
       ("pos" ->> DateTimeInterval.make(3, 1, 14, 600, 342000)) ::
       HNil)
 
-    */
-  //}
+  }
 
   val DM = PostgresDestinationModule
 

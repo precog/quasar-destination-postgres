@@ -21,7 +21,6 @@ import slamdata.Predef._
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource.ResourcePath
 import quasar.connector.{MonadResourceErr, ResourceError}
-import quasar.lib.jdbc.Slf4sLogHandler
 import quasar.lib.jdbc.destination.WriteMode
 
 import cats.{Alternative, ~>}
@@ -60,8 +59,6 @@ object TempTableFlow {
       retry: ConnectionIO ~> ConnectionIO)
       : Resource[F, TempTableFlow] = {
 
-    val log = Slf4sLogHandler(logger)
-
     def checkWriteMode(tableName: String, schemaName: Option[String]): F[Unit] = {
       val existing = checkExists(logger)(tableName, schemaName) map { results =>
         results.exists(_ === 1)
@@ -80,29 +77,19 @@ object TempTableFlow {
     }
 
     val acquire: F[(TempTable, TempTableFlow)] = for {
-      _ <- println("0").pure[F]
       tbl <- tableFromPath(path) match {
         case Some(t) => t.pure[F]
         case None => MonadResourceErr[F].raiseError(ResourceError.notAResource(path))
       }
-      _ <- println("1").pure[F]
       columnFragments <- specifyColumnFragments[F](columns)
-      _ <- println("2").pure[F]
       _ <- checkWriteMode(tbl, schema)
-      _ <- println("3").pure[F]
       totalBytes <- Ref.in[F, ConnectionIO, Long](0L)
-      _ <- println("4").pure[F]
       tempTable = TempTable(logger, totalBytes, writeMode, tbl, schema, columns, columnFragments, idColumn, filterColumn)
-      _ <- println("5").pure[F]
       _ <- {
-        println("a").pure[ConnectionIO] >>
         tempTable.drop >>
-        println("b").pure[ConnectionIO] >>
         tempTable.create >>
-        println("c").pure[ConnectionIO] >>
         commit
       }.transact(xa)
-      _ <- println("6").pure[F]
     } yield {
       val flow = new TempTableFlow {
         def ingest(chunk: Chunk[Byte]): ConnectionIO[Unit] = {
@@ -164,8 +151,7 @@ object TempTableFlow {
 
       def createIndex(tbl: Fragment, col: Fragment): ConnectionIO[Unit] = {
         val fragment = fr"CREATE INDEX IF NOT EXISTS" ++ Fragment.const(hygienicIdent(indexName)) ++ fr"ON" ++
-          tbl ++ fr0"." ++ col
-        println(fragment.toString)
+          tbl ++ fr0"(" ++ col ++ fr0")"
         fragment.updateWithLogHandler(logHandler(log)).run.void
       }
 
@@ -197,7 +183,6 @@ object TempTableFlow {
 
       def createTgt: ConnectionIO[Unit] = {
         val fragment = fr"CREATE TABLE" ++ tgtFragment ++ Fragments.parentheses(columnFragments.intercalate(fr","))
-        println(fragment)
         fragment.updateWithLogHandler(logHandler(log)).run.void
       }
 
@@ -219,17 +204,15 @@ object TempTableFlow {
       val mbCreateIndex: ConnectionIO[Unit] =
         (Alternative[Option].guard(idColumn.map(_.name) =!= filterColumn.map(_.name)) *> idColumn) traverse_
         { col =>
-          val colFragment = Fragments.parentheses {
+          val colFragment =
             Fragment.const(hygienicIdent(col.name))
-          }
           createIndex(tgtFragment, colFragment)
         }
 
       val mbCreateFilterIndex: ConnectionIO[Unit] =
         filterColumn.traverse_({ (col: Column[_]) =>
-          val colFragment = Fragments.parentheses {
+          val colFragment =
             Fragment.const(hygienicIdent(col.name))
-          }
           createIndex(tmpFragment, colFragment)
         })
 
@@ -238,7 +221,7 @@ object TempTableFlow {
           val cols =
             columns.map(c => hygienicIdent(c.name)).intercalate(", ")
 
-          val tbl = schemaName.fold("")(s => hygienicIdent(s"s.")) + hygienicIdent(tmpName)
+          val tbl = schemaName.fold("")(s => s"${hygienicIdent(s)}.") + hygienicIdent(tmpName)
           val copyQuery =
             s"COPY $tbl ($cols) FROM STDIN WITH (FORMAT csv, HEADER FALSE, ENCODING 'UTF8')"
 
@@ -253,14 +236,13 @@ object TempTableFlow {
           }
 
           for {
-            _ <- println(copyQuery).pure[ConnectionIO]
             back <- PHC.pgGetCopyAPI(copied)
             _ <- recordChunks(chunk)
           } yield back
         }
 
         def drop: ConnectionIO[Unit] = {
-          val fragment = fr"DROP TABLE IF EXISTS" ++ Fragment.const0(hygienicIdent(tmpName))
+          val fragment = fr"DROP TABLE IF EXISTS" ++ tmpFragment
           fragment.updateWithLogHandler(logHandler(log)).run.void
         }
 
@@ -272,7 +254,7 @@ object TempTableFlow {
         }
 
         def rename: ConnectionIO[Unit] = {
-          val fragment = fr"ALTER TABLE" ++ tgtFragment ++ fr"RENAME TO" ++ Fragment.const(hygienicIdent(tableName))
+          val fragment = fr"ALTER TABLE" ++ tmpFragment ++ fr" RENAME TO" ++ Fragment.const(hygienicIdent(tableName))
           fragment.updateWithLogHandler(logHandler(log)).run.void
         }
 

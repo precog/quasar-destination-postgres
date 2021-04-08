@@ -130,9 +130,7 @@ object SinkBuilder {
       : Pipe[ConnectionIO, DataEvent[Byte, OffsetKey.Actual[A]], Option[OffsetKey.Actual[A]]] = _ evalMap {
 
       case DataEvent.Create(chunk) =>
-        println("z").pure[ConnectionIO] >>
         flow.ingest(chunk) >>
-        println("y").pure[ConnectionIO] >>
         none[OffsetKey.Actual[A]].pure[ConnectionIO]
 
       case DataEvent.Delete(ids) =>
@@ -140,16 +138,11 @@ object SinkBuilder {
 
       case DataEvent.Commit(offset) => refMode.get flatMap {
         case QWriteMode.Replace =>
-          println("zz").pure[ConnectionIO] >>
           flow.replace >>
-          println("yy").pure[ConnectionIO] >>
           refMode.set(QWriteMode.Append) >>
-          println("ww").pure[ConnectionIO] >>
           offset.some.pure[ConnectionIO]
         case QWriteMode.Append =>
-          println("zzz").pure[ConnectionIO] >>
           flow.append >>
-          println("yyy").pure[ConnectionIO] >>
           offset.some.pure[ConnectionIO]
       }
     }
@@ -158,7 +151,6 @@ object SinkBuilder {
       Effect[F].delay(logger.trace(msg))
 
     val result = for {
-      _ <- println("!!!").pure[Stream[F, *]]
       flow <- Stream.resource(TempTableFlow(
         xa,
         logger,
@@ -169,9 +161,7 @@ object SinkBuilder {
         idColumn,
         filterColumn,
         retry))
-      _ <- println("???").pure[Stream[F, *]]
       refMode <- Stream.eval(Ref.in[F, ConnectionIO, QWriteMode](writeMode))
-      _ <- println("***").pure[Stream[F, *]]
       offset <- {
         events.evalTap(logEvents)
           .translate(toConnectionIO[F])

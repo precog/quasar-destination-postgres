@@ -19,18 +19,14 @@ package quasar.plugin.postgres
 import slamdata.Predef._
 
 import cats._
-import cats.arrow.FunctionK
 import cats.data._
-import cats.effect.{Effect, ExitCase, LiftIO, Sync, Timer}
-import cats.effect.concurrent.Ref
+import cats.effect.{Effect, Resource}
 import cats.implicits._
 
 import doobie._
 import doobie.implicits._
-import doobie.postgres._
-import doobie.postgres.implicits._
 
-import fs2.{Chunk, Pipe, Stream}
+import fs2.{Pipe, Stream}
 
 import org.slf4s.Logging
 
@@ -40,24 +36,26 @@ import quasar.connector._
 import quasar.connector.render.RenderConfig
 import quasar.lib.jdbc.destination.WriteMode
 
-import scala.concurrent.duration.MILLISECONDS
-
 object CsvCreateSink extends Logging {
   def apply[F[_]: Effect: MonadResourceErr](
       xa: Transactor[F],
       writeMode: WriteMode,
       schema: Option[String])(
       path: ResourcePath,
-      columns: NonEmptyList[Column[ColumnType.Scalar]])(
-      implicit timer: Timer[F])
+      columns: NonEmptyList[Column[ColumnType.Scalar]])
       : (RenderConfig[Byte], Pipe[F, Byte, Unit]) = {
 
    val noopN: ConnectionIO ~> ConnectionIO = λ[ConnectionIO ~> ConnectionIO](x => x)
 
+   def replaceR(flow: TempTableFlow): Resource[F, TempTableFlow] = {
+      Resource.make(flow.pure[F])(x => flow.replace.transact(xa))
+   }
+
    (PostgresCsvConfig, in => for {
-     flow <- Stream.resource(TempTableFlow(xa, log, writeMode, path, schema, columns, None, None, noopN))
-     _ <- in.chunks.evalMap(x => flow.ingest(x).transact(xa))
-     _ <- Stream.eval(flow.replace.transact(xa))
+     flow <- Stream.resource {
+       TempTableFlow(xa, log, writeMode, path, schema, columns, None, None, noopN) flatMap replaceR
+     }
+     _ <- in.chunks.evalMap(c => flow.ingest(c).transact(xa))
    } yield ())
   }
 }
