@@ -18,14 +18,10 @@ package quasar.plugin.postgres
 
 import scala._, Predef._
 
-import cats.{~>, MonadError}
 import cats.data.NonEmptyList
 import cats.effect.{Effect, Timer, Resource}
-import cats.implicits._
 
-import doobie.{ConnectionIO, Transactor}
-import doobie.implicits._
-import doobie.free.connection.rollback
+import doobie.Transactor
 
 import quasar.api.ColumnType
 import quasar.api.destination._
@@ -63,19 +59,3 @@ final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
   val sinks: NonEmptyList[ResultSink[F, Type]] =
     flowSinks
 }
-
-object PostgresDestination {
-  private def retryN[F[_]: Effect: Timer](maxN: Int, timeout: FiniteDuration, n: Int): ConnectionIO ~> ConnectionIO =
-    λ[ConnectionIO ~> ConnectionIO] { action =>
-      action.attempt flatMap {
-        case Right(a) => a.pure[ConnectionIO]
-        case Left(e) if n < maxN =>
-          rollback >>
-          toConnectionIO[F].apply(Timer[F].sleep(timeout)) >>
-          retryN[F](maxN, timeout, n + 1).apply(action)
-        case Left(e) => MonadError[ConnectionIO, Throwable].raiseError(e)
-      }
-    }
-}
-
-
