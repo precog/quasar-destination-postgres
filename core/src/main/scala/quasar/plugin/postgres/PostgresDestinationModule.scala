@@ -105,7 +105,13 @@ object PostgresDestinationModule extends DestinationModule with Logging {
         Resource.liftF(Sync[F].delay(LoggerFactory(s"quasar.lib.destination.postgres-$suffix")))
       }
 
-    } yield new PostgresDestination(xa, cfg.writeMode.getOrElse(WriteMode.Replace), cfg.schema, logger): Destination[F]
+    } yield new PostgresDestination(
+      xa,
+      cfg.writeMode.getOrElse(WriteMode.Replace),
+      cfg.schema,
+      cfg.maxRetries,
+      cfg.retryTransactionTimeout,
+      logger): Destination[F]
 
     init.value
   }

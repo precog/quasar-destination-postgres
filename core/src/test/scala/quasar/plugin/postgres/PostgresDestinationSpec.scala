@@ -170,8 +170,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
             OffsetKey.Actual.string("commit2"))
         }
     }
-/*
-    "upsert delete rows with string typed primary key" >>* {
+
+    "upsert updates rows with string typed primary key on append" >>* {
       Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
           Stream(
@@ -179,23 +179,31 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
               List(
                 ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
                 ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
-            UpsertEvent.Commit("commit1"),
+            UpsertEvent.Commit("commit1"))
+
+        val append =
+          Stream(
             UpsertEvent.Delete(Ids.StringIds(List("foo"))),
+            UpsertEvent.Create(
+              List(
+                ("x" ->> "foo") :: ("y" ->> "check0") :: HNil,
+                ("x" ->> "bar") :: ("y" ->> "check1") :: HNil)),
             UpsertEvent.Commit("commit2"))
 
         for {
           tbl <- freshTableName
-          (values, offsets) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Replace, events)
+          (values1, offsets1) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Replace, events)
+          (values2, offsets2) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Append, append)
         } yield {
-          values must_== List("baz" :: "qux" :: HNil)
-          offsets must_== List(
-            OffsetKey.Actual.string("commit1"),
-            OffsetKey.Actual.string("commit2"))
+          offsets1 must_== List(OffsetKey.Actual.string("commit1"))
+          offsets2 must_== List(OffsetKey.Actual.string("commit2"))
+          Set(values1:_*) must_== Set("foo" :: "bar" :: HNil, "baz" :: "qux" :: HNil)
+          Set(values2:_*) must_== Set("baz" :: "qux" :: HNil, "foo" :: "check0" :: HNil, "bar" :: "check1" :: HNil)
         }
       }
     }
 
-    "upsert delete rows with long typed primary key" >>* {
+    "upsert deletes rows with long typed primary key on append" >>* {
       Consumer.upsert[Int :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
         val events =
           Stream(
@@ -203,22 +211,28 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
               List(
                 ("x" ->> 40) :: ("y" ->> "bar") :: HNil,
                 ("x" ->> 42) :: ("y" ->> "qux") :: HNil)),
-            UpsertEvent.Commit("commit1"),
+            UpsertEvent.Commit("commit1"))
+
+        val append =
+          Stream(
             UpsertEvent.Delete(Ids.LongIds(List(40))),
+            UpsertEvent.Create(
+              List(
+                ("x" ->> 40) :: ("y" ->> "check") :: HNil)),
             UpsertEvent.Commit("commit2"))
 
         for {
           tbl <- freshTableName
-          (values, offsets) <- consumer(tbl, Some(Column("x", ColumnType.Number)), QWriteMode.Replace, events)
+          (values1, offsets1) <- consumer(tbl, Some(Column("x", ColumnType.Number)), QWriteMode.Replace, events)
+          (values2, offsets2) <- consumer(tbl, Some(Column("x", ColumnType.Number)), QWriteMode.Append, append)
         } yield {
-          values must_== List(42 :: "qux" :: HNil)
-          offsets must_== List(
-            OffsetKey.Actual.string("commit1"),
-            OffsetKey.Actual.string("commit2"))
+          Set(values1:_*) must_== Set(40 :: "bar" :: HNil, 42 :: "qux" :: HNil)
+          Set(values2:_*) must_== Set(40 :: "check" :: HNil, 42 :: "qux" :: HNil)
+          offsets1 must_== List(OffsetKey.Actual.string("commit1"))
+          offsets2 must_== List(OffsetKey.Actual.string("commit2"))
         }
       }
     }
-    */
 
     "upsert empty deletes without failing" >>* {
       Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
@@ -246,36 +260,6 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         }
       }
     }
-
-    /*
-    "upsert delete same id twice" >>* {
-      Consumer.upsert[String :: String :: HNil](config(), TestConnectionUrl).use { consumer =>
-        val events =
-          Stream(
-            UpsertEvent.Create(
-              List(
-                ("x" ->> "foo") :: ("y" ->> "bar") :: HNil,
-                ("x" ->> "baz") :: ("y" ->> "qux") :: HNil)),
-            UpsertEvent.Commit("commit1"),
-            UpsertEvent.Delete(Ids.StringIds(List("foo"))),
-            UpsertEvent.Commit("commit2"),
-            UpsertEvent.Delete(Ids.StringIds(List("foo"))),
-            UpsertEvent.Commit("commit3"))
-
-        for {
-          tbl <- freshTableName
-          (values, offsets) <- consumer(tbl, Some(Column("x", ColumnType.String)), QWriteMode.Replace, events)
-        } yield {
-          values must_== List("baz" :: "qux" :: HNil)
-
-          offsets must_== List(
-            OffsetKey.Actual.string("commit1"),
-            OffsetKey.Actual.string("commit2"),
-            OffsetKey.Actual.string("commit3"))
-        }
-      }
-    }
-    */
 
     "creates table and then appends" >> appendAndUpsert[String :: String :: HNil] { (toOpt, consumer) =>
       val events1 =
@@ -664,6 +648,8 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     ("connectionUri" := url) ->:
     ("schema" := schema) ->:
     ("writeMode" := writeMode) ->:
+    ("maxTransactionReattempts" := 0) ->:
+    ("retryTransactionTimeoutMs" := 0) ->:
     jEmptyObject
 
   def csv[A](cfg: Json)(f: ResultSink.CreateSink[IO, ColumnType.Scalar, Byte] => IO[A]): IO[A] =

@@ -20,17 +20,19 @@ import scala._, Predef._
 
 import cats.{~>, MonadError}
 import cats.data.NonEmptyList
-import cats.effect.{Effect, Timer}
+import cats.effect.{Effect, Timer, Resource}
 import cats.implicits._
 
 import doobie.{ConnectionIO, Transactor}
 import doobie.implicits._
 import doobie.free.connection.rollback
 
+import quasar.api.ColumnType
 import quasar.api.destination._
 import quasar.connector.MonadResourceErr
 import quasar.connector.destination._
 import quasar.lib.jdbc.destination.WriteMode
+import quasar.lib.jdbc.destination.flow.{FlowSinks, FlowArgs, Flow, Retry}
 
 import org.slf4s.Logger
 
@@ -40,19 +42,26 @@ final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     xa: Transactor[F],
     writeMode: WriteMode,
     schema: Option[String],
+    maxRetries: Int,
+    retryTimeout: FiniteDuration,
     logger: Logger)
-    extends LegacyDestination[F] {
+    extends LegacyDestination[F] with FlowSinks[F, ColumnType.Scalar, Byte] {
 
   val destinationType: DestinationType =
     PostgresDestinationModule.destinationType
 
-  val retry = PostgresDestination.retryN(10, 60.seconds, 0)
+  def flowResource(args: FlowArgs[ColumnType.Scalar]): Resource[F, Flow[Byte]] =
+    TempTableFlow(xa, logger, writeMode, schema, args) map { (f: Flow[Byte]) =>
+      f.mapK(Retry[F](maxRetries, retryTimeout))
+    }
+
+  def render(args: FlowArgs[ColumnType.Scalar]) = PostgresCsvConfig
+
+  val flowTransactor = xa
+  val flowLogger = logger
 
   val sinks: NonEmptyList[ResultSink[F, Type]] =
-    NonEmptyList.of(
-      ResultSink.create(CsvCreateSink(xa, writeMode, schema)),
-      ResultSink.upsert(SinkBuilder.upsert(xa, writeMode, schema, retry, logger)),
-      ResultSink.append(SinkBuilder.append(xa, writeMode, schema, retry, logger)))
+    flowSinks
 }
 
 object PostgresDestination {

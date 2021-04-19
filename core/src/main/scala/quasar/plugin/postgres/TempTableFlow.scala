@@ -19,11 +19,12 @@ package quasar.plugin.postgres
 import slamdata.Predef._
 
 import quasar.api.{Column, ColumnType}
-import quasar.api.resource.ResourcePath
-import quasar.connector.{MonadResourceErr, ResourceError}
+import quasar.connector.{MonadResourceErr, ResourceError, IdBatch}
+import quasar.connector.destination.{WriteMode => QWriteMode}
 import quasar.lib.jdbc.destination.WriteMode
+import quasar.lib.jdbc.destination.flow.{Flow, FlowArgs}
 
-import cats.{Alternative, ~>}
+import cats.Alternative
 import cats.data.NonEmptyList
 import cats.effect._
 import cats.effect.concurrent.Ref
@@ -40,24 +41,14 @@ import fs2.Chunk
 
 import org.slf4s.Logger
 
-sealed trait TempTableFlow {
-  def ingest(chunk: Chunk[Byte]): ConnectionIO[Unit]
-  def replace: ConnectionIO[Unit]
-  def append: ConnectionIO[Unit]
-}
-
 object TempTableFlow {
   def apply[F[_]: Sync: MonadResourceErr](
       xa: Transactor[F],
       logger: Logger,
       writeMode: WriteMode,
-      path: ResourcePath,
       schema: Option[String],
-      columns: NonEmptyList[Column[ColumnType.Scalar]],
-      idColumn: Option[Column[_]],
-      filterColumn: Option[Column[_]],
-      retry: ConnectionIO ~> ConnectionIO)
-      : Resource[F, TempTableFlow] = {
+      args: FlowArgs[ColumnType.Scalar])
+      : Resource[F, Flow[Byte]] = {
 
     def checkWriteMode(tableName: String, schemaName: Option[String]): F[Unit] = {
       val existing = checkExists(logger)(tableName, schemaName) map { results =>
@@ -67,7 +58,7 @@ object TempTableFlow {
         case WriteMode.Create => existing.transact(xa) flatMap { exists =>
           MonadResourceErr[F].raiseError(
             ResourceError.accessDenied(
-              path,
+              args.path,
               "Create mode is set but table exists already".some,
               none)).whenA(exists)
         }
@@ -76,36 +67,51 @@ object TempTableFlow {
       }
     }
 
-    val acquire: F[(TempTable, TempTableFlow)] = for {
-      tbl <- tableFromPath(path) match {
+    val acquire: F[(TempTable, Flow[Byte])] = for {
+      tbl <- tableFromPath(args.path) match {
         case Some(t) => t.pure[F]
-        case None => MonadResourceErr[F].raiseError(ResourceError.notAResource(path))
+        case None => MonadResourceErr[F].raiseError(ResourceError.notAResource(args.path))
       }
-      columnFragments <- specifyColumnFragments[F](columns)
+      columnFragments <- specifyColumnFragments[F](args.columns)
       _ <- checkWriteMode(tbl, schema)
       totalBytes <- Ref.in[F, ConnectionIO, Long](0L)
-      tempTable = TempTable(logger, totalBytes, writeMode, tbl, schema, columns, columnFragments, idColumn, filterColumn)
+      tempTable = TempTable(
+        logger,
+        totalBytes,
+        writeMode,
+        tbl,
+        schema,
+        args.columns,
+        columnFragments,
+        args.idColumn,
+        args.filterColumn)
       _ <- {
         tempTable.drop >>
         tempTable.create >>
         commit
       }.transact(xa)
+      refMode <- Ref.in[F, ConnectionIO, QWriteMode](args.writeMode)
     } yield {
-      val flow = new TempTableFlow {
-        def ingest(chunk: Chunk[Byte]): ConnectionIO[Unit] = {
+      val flow = new Flow[Byte] {
+        def delete(ids: IdBatch) =
+          ().pure[ConnectionIO]
+
+        def ingest(chunk: Chunk[Byte]): ConnectionIO[Unit] =
           tempTable.ingest(chunk) >> commit
+
+        def replace: ConnectionIO[Unit] = refMode.get flatMap {
+          case QWriteMode.Replace =>
+            tempTable.persist >> commit >> refMode.set(QWriteMode.Append)
+          case QWriteMode.Append =>
+            append
         }
-        def replace: ConnectionIO[Unit] = {
-          tempTable.persist >> commit
-        }
-        def append: ConnectionIO[Unit] = {
+        def append: ConnectionIO[Unit] =
           tempTable.append >> commit
-        }
       }
       (tempTable, flow)
     }
 
-    val release: ((TempTable, TempTableFlow)) => F[Unit] = { case (tempTable, _) =>
+    val release: ((TempTable, _)) => F[Unit] = { case (tempTable, _) =>
       (tempTable.drop >> commit).transact(xa)
     }
 

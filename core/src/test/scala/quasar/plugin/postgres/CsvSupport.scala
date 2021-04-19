@@ -118,24 +118,23 @@ trait CsvSupport {
     ktl: ToList[K, String],
     ttl: ToList[T, ColumnType.Scalar])
     : Stream[F, List[Column[ColumnType.Scalar]]] = {
-    val go = events.pull.peek1 flatMap {
-      case Some((UpsertEvent.Create(records), _)) =>
-        records.headOption match {
-          case Some(r) =>
-            val rkeys = r.keys.toList
-            val rtypes = r.values.map(asColumnType).toList
+    def go(inp: Stream[F, UpsertEvent[R]]): Pull[F, List[Column[ColumnType.Scalar]], Unit] = inp.pull.uncons1 flatMap {
+      case Some((UpsertEvent.Create(records), tail)) => records.headOption match {
+        case Some(r) =>
+          val rkeys = r.keys.toList
+          val rtypes = r.values.map(asColumnType).toList
+          val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
+          Pull.output1(columns.filter(c => c.some =!= idColumn)) >> Pull.done
+        case None =>
+          Pull.done
+      }
+      case Some((_, tail)) =>
+        go(tail)
+      case _ =>
+        Pull.done
 
-            val columns = rkeys.zip(rtypes).map((Column[ColumnType.Scalar] _).tupled)
-
-            Pull.output1(columns.filter(c => c.some =!= idColumn))
-
-          case _ => Pull.done
-        }
-
-      case _ => Pull.done
     }
-
-    go.stream
+    go(events).stream
   }
 
   def toAppendCsvSink[F[_]: Async, P <: Poly1, R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
