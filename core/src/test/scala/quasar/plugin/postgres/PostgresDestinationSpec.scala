@@ -387,7 +387,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
         drainAndSelect(
           TestConnectionUrl,
-          "foobar; drop table really_important; eate table haha",
+          "foobar; drop table really_important; create table haha",
           sink,
           Stream.emits(recs)
         ).map(_ must_=== recs)
@@ -511,7 +511,6 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         .map(_ must beLeft.like {
           case ResourceError.throwableP(ResourceError.AccessDenied(_, _, _)) =>
             ok
-          //case TableAlreadyExists(_, _) => ok
         })
     }
 
@@ -534,7 +533,6 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
         .map(_ must beLeft.like {
           case ResourceError.throwableP(ResourceError.AccessDenied(_, _, _)) =>
             ok
-          //case TableAlreadyExists(_, _) => ok
         })
     }
 
@@ -627,7 +625,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
   val DM = PostgresDestinationModule
 
-  val TestConnectionUrl: String = "postgresql://localhost:5433/postgres?user=postgres&password=secret"
+  val TestConnectionUrl: String = "postgresql://localhost:54322/postgres?user=postgres&password=postgres"
 
   implicit val CS: ContextShift[IO] = IO.contextShift(global)
 
