@@ -24,9 +24,24 @@ import cats.implicits._
 
 import java.net.URI
 
+import quasar.lib.jdbc.destination.WriteMode
+
+import scala.concurrent.duration._
 import scala.util.control.NonFatal
 
-final case class Config(connectionUri: URI, schema: Option[String], writeMode: Option[WriteMode]) {
+final case class Config(
+    connectionUri: URI,
+    schema: Option[String],
+    writeMode: Option[WriteMode],
+    retryTransactionTimeoutMs: Option[Int],
+    maxTransactionReattempts: Option[Int]) {
+
+  def retryTransactionTimeout: FiniteDuration =
+    retryTransactionTimeoutMs.map(_.milliseconds) getOrElse Config.DefaultTimeout
+
+  def maxRetries: Int =
+    maxTransactionReattempts getOrElse Config.DefaultMaxReattempts
+
   @SuppressWarnings(Array("org.wartremover.warts.Null"))
   def sanitized: Config = {
     val sanitizedUserInfo =
@@ -65,6 +80,10 @@ final case class Config(connectionUri: URI, schema: Option[String], writeMode: O
 }
 
 object Config {
+  def DefaultTimeout: FiniteDuration = 60.seconds
+
+  def DefaultMaxReattempts: Int = 10
+
   implicit val codecJson: CodecJson[Config] = {
     implicit val uriDecodeJson: DecodeJson[URI] =
       DecodeJson(c => c.as[String] flatMap { s =>
@@ -78,6 +97,11 @@ object Config {
     implicit val uriEncodeJson: EncodeJson[URI] =
       EncodeJson.of[String].contramap(_.toString)
 
-    casecodec3(Config.apply, Config.unapply)("connectionUri", "schema", "writeMode")
+    casecodec5(Config.apply, Config.unapply)(
+      "connectionUri",
+      "schema",
+      "writeMode",
+      "retryTransactionTimeoutMs",
+      "maxTransactionReattempts")
   }
 }

@@ -18,7 +18,7 @@ package quasar.plugin
 
 import slamdata.Predef._
 
-import cats.effect.Sync
+import cats.effect.{Sync, Effect, LiftIO}
 import cats.effect.concurrent.Ref
 import cats.ApplicativeError
 import cats.data.{NonEmptyList, ValidatedNel}
@@ -31,12 +31,12 @@ import java.time.temporal.ChronoField
 import quasar.api.{Column, ColumnType}
 import quasar.api.resource._
 import quasar.connector.render.RenderConfig
+import quasar.lib.jdbc.Slf4sLogHandler
 
 import scala.util.Random
 
 import doobie._
 import doobie.implicits._
-import doobie.util.log.{ExecFailure, ProcessingFailure, Success}
 
 import fs2.Chunk
 
@@ -103,72 +103,6 @@ package object postgres {
       invalid => ApplicativeError[F, Throwable].raiseError(new ColumnTypesNotSupported(invalid)),
       _.pure[F])
 
-  def createTable(log: Logger)(table: Table, colSpecs: NonEmptyList[Fragment])
-      : ConnectionIO[Int] = {
-    val preamble =
-      fr"CREATE TABLE" ++ Fragment.const(hygienicIdent(table))
-
-    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
-      .updateWithLogHandler(logHandler(log))
-      .run
-  }
-
-  def createTableIfNotExists(log: Logger)(table: Table, colSpecs: NonEmptyList[Fragment])
-      : ConnectionIO[Int] = {
-    val preamble =
-      fr"CREATE TABLE IF NOT EXISTS" ++ Fragment.const(hygienicIdent(table))
-
-    (preamble ++ Fragments.parentheses(colSpecs.intercalate(fr",")))
-      .updateWithLogHandler(logHandler(log))
-      .run
-  }
-
-  def insertInto(log: Logger)(from: Table, target: Table): ConnectionIO[Int] =
-    (fr"INSERT INTO" ++
-      Fragment.const(hygienicIdent(target)) ++
-      fr"SELECT * FROM" ++
-      Fragment.const(hygienicIdent(from)))
-      .updateWithLogHandler(logHandler(log))
-      .run
-
-  def renameTable(log: Logger)(from: Table, target: Table): ConnectionIO[Int] =
-    (fr"ALTER TABLE" ++
-      Fragment.const(hygienicIdent(from)) ++
-      fr"RENAME TO" ++
-      Fragment.const(hygienicIdent(target)))
-      .updateWithLogHandler(logHandler(log))
-      .run
-
-  def updateTable(log: Logger)(
-      writeMode: WriteMode,
-      colSpecs: NonEmptyList[Fragment],
-      from: Table,
-      target: Table) =
-    writeMode match {
-       case WriteMode.Create =>
-         createTable(log)(target, colSpecs) >> insertInto(log)(from, target)
-
-       case WriteMode.Replace =>
-         dropTableIfExists(log)(target) >> renameTable(log)(from, target)
-
-       case WriteMode.Truncate =>
-         createTableIfNotExists(log)(target, colSpecs) >> truncateTable(log)(target) >> insertInto(log)(from, target)
-
-       case WriteMode.Append =>
-         createTableIfNotExists(log)(target, colSpecs) >> insertInto(log)(from, target)
-    }
-
-  def createIndex(log: Logger)(table: Table, col: Fragment): ConnectionIO[Int] = {
-    val idxName = s"precog_id_idx_$table"
-
-    ((fr"CREATE INDEX IF NOT EXISTS" ++
-      Fragment.const(hygienicIdent(idxName)) ++
-      fr"ON" ++
-      Fragment.const(hygienicIdent(table))) ++ col)
-      .updateWithLogHandler(logHandler(log))
-      .run
-  }
-
   def checkExists(log: Logger)(table: Table, schema: Option[Ident]): ConnectionIO[Option[Int]] =
     (fr0"SELECT count(*) as exists_flag FROM information_schema.tables WHERE table_name ='" ++
       Fragment.const0(table) ++
@@ -179,17 +113,6 @@ package object postgres {
         .getOrElse(fr0"'public'")))
       .queryWithLogHandler[Int](logHandler(log))
       .option
-
-  def dropTableIfExists(log: Logger)(table: Table): ConnectionIO[Int] =
-    (fr"DROP TABLE IF EXISTS" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler(log))
-      .run
-
-  def truncateTable(log: Logger)(table: Table): ConnectionIO[Int] =
-    (fr"TRUNCATE" ++ Fragment.const(hygienicIdent(table)))
-      .updateWithLogHandler(logHandler(log))
-      .run
-
   /** Returns the JDBC connection string corresponding to the given postgres URI. */
   def jdbcUri(pgUri: URI): String =
     s"jdbc:${pgUri}"
@@ -203,7 +126,6 @@ package object postgres {
     Some(p) collect {
       case table /: ResourcePath.Root => table
     }
-
   def recordChunks[F[_]: Sync](total: Ref[F, Long], log: Logger)(c: Chunk[Byte]): F[Unit] =
     total.update(_ + c.size) >> logChunkSize[F](c, log)
 
@@ -217,21 +139,13 @@ package object postgres {
     Sync[F].delay(log.trace(msg))
 
   def logHandler(log: Logger): LogHandler =
-    LogHandler {
-      case Success(q, _, e, p) =>
-        log.debug(s"SUCCESS: `$q` in ${(e + p).toMillis}ms (${e.toMillis} ms exec, ${p.toMillis} ms proc)")
-
-      case ExecFailure(q, _, e, t) =>
-        log.debug(s"EXECUTION_FAILURE: `$q` after ${e.toMillis} ms, detail: ${t.getMessage}", t)
-
-      case ProcessingFailure(q, _, e, p, t) =>
-        log.debug(s"PROCESSING_FAILURE: `$q` after ${(e + p).toMillis} ms (${e.toMillis} ms exec, ${p.toMillis} ms proc (failed)), detail: ${t.getMessage}", t)
-    }
+    Slf4sLogHandler(log)
 
   def columnSpec(c: Column[ColumnType.Scalar]):
       ValidatedNel[ColumnType.Scalar, Fragment] =
     pgColumnType(c.tpe).map(Fragment.const(hygienicIdent(c.name)) ++ _)
 
+  def toConnectionIO[F[_]: Effect] = Effect.toIOK[F] andThen LiftIO.liftK[ConnectionIO]
   ////
 
   private def logChunkSize[F[_]: Sync](c: Chunk[Byte], log: Logger): F[Unit] =

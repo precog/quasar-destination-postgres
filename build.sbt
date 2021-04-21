@@ -65,6 +65,7 @@ lazy val core = project
 
     libraryDependencies ++= Seq(
       "com.github.tototoshi" %% "scala-csv" % "1.3.6" % Test,
+      "com.precog" %% "quasar-lib-jdbc" % managedVersions.value("precog-quasar-lib-jdbc"),
       "com.precog" %% "qdata-core" % managedVersions.value("precog-qdata") % Test,
       "com.precog" %% "quasar-foundation" % quasarPluginQuasarVersion.value % "test->test" classifier "tests",
       "io.argonaut" %% "argonaut-scalaz" % "6.2.3" % Test
@@ -72,3 +73,4 @@ lazy val core = project
   .enablePlugins(QuasarPlugin)
   .evictToLocal("QUASAR_PATH", "api", true)
   .evictToLocal("QUASAR_PATH", "connector", true)
+  .evictToLocal("QUASAR_LIB_JDBC_PATH", "core", true)

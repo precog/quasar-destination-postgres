@@ -30,12 +30,13 @@ import doobie.implicits._
 
 import java.util.concurrent.Executors
 
-import org.slf4s.Logging
+import org.slf4s.{Logging, LoggerFactory}
 
 import quasar.api.destination.{DestinationError => DE, _}
 import quasar.concurrent._
 import quasar.connector.MonadResourceErr
 import quasar.connector.destination.{Destination, DestinationModule, PushmiPullyu}
+import quasar.lib.jdbc.destination.WriteMode
 
 import scala.concurrent.ExecutionContext
 import scala.concurrent.duration._
@@ -100,7 +101,17 @@ object PostgresDestinationModule extends DestinationModule with Logging {
       _ <- EitherT.right[InitErr](Resource.liftF(Sync[F].delay(
         log.info(s"Initialized postgres destination: tag = $suffix, config = ${cfg.sanitized.asJson}"))))
 
-    } yield new PostgresDestination(xa, cfg.writeMode.getOrElse(WriteMode.Replace), cfg.schema): Destination[F]
+      logger <- EitherT.right[InitErr]{
+        Resource.liftF(Sync[F].delay(LoggerFactory(s"quasar.lib.destination.postgres-$suffix")))
+      }
+
+    } yield new PostgresDestination(
+      xa,
+      cfg.writeMode.getOrElse(WriteMode.Replace),
+      cfg.schema,
+      cfg.maxRetries,
+      cfg.retryTransactionTimeout,
+      logger): Destination[F]
 
     init.value
   }
