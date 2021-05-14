@@ -24,7 +24,6 @@ import quasar.connector.destination.{WriteMode => QWriteMode}
 import quasar.lib.jdbc.destination.WriteMode
 import quasar.lib.jdbc.destination.flow.{Flow, FlowArgs}
 
-import cats.Alternative
 import cats.data.NonEmptyList
 import cats.effect._
 import cats.effect.concurrent.Ref
@@ -155,9 +154,10 @@ object TempTableFlow {
 
       val indexName: String = s"precog_id_idx_$tableName"
 
-      def createIndex(tbl: Fragment, col: Fragment): ConnectionIO[Unit] = {
+      def createIndex(tbl: Fragment, col: Column[_]): ConnectionIO[Unit] = {
+        val colFragment = Fragment.const(hygienicIdent(col.name))
         val fragment = fr"CREATE INDEX IF NOT EXISTS" ++ Fragment.const(hygienicIdent(indexName)) ++ fr"ON" ++
-          tbl ++ fr0"(" ++ col ++ fr0")"
+          tbl ++ fr0"(" ++ colFragment ++ fr0")"
         fragment.updateWithLogHandler(logHandler(log)).run.void
       }
 
@@ -213,20 +213,8 @@ object TempTableFlow {
         fragment.updateWithLogHandler(logHandler(log)).run.void
       }
 
-      val mbCreateIndex: ConnectionIO[Unit] =
-        (Alternative[Option].guard(idColumn.map(_.name) =!= filterColumn.map(_.name)) *> idColumn) traverse_
-        { col =>
-          val colFragment =
-            Fragment.const(hygienicIdent(col.name))
-          createIndex(tgtFragment, colFragment)
-        }
-
       val mbCreateFilterIndex: ConnectionIO[Unit] =
-        filterColumn.traverse_({ (col: Column[_]) =>
-          val colFragment =
-            Fragment.const(hygienicIdent(col.name))
-          createIndex(tmpFragment, colFragment)
-        })
+        filterColumn.traverse_(createIndex(tmpFragment, _))
 
       new TempTable {
         def ingest(chunk: Chunk[Byte]): ConnectionIO[Unit] = {
@@ -271,27 +259,35 @@ object TempTableFlow {
         }
 
         def persist: ConnectionIO[Unit] = {
-          val prepare = writeMode match {
+          val indexColumn =
+            if (idColumn.map(_.name) =!= filterColumn.map(_.name))
+              idColumn
+            else
+              none[Column[_]]
+
+          writeMode match {
             case WriteMode.Create =>
               createTgt >>
-              mbCreateIndex >>
+              idColumn.traverse_(createIndex(tgtFragment, _)) >>
               insertInto >>
               truncate
             case WriteMode.Replace =>
               dropTgtIfExists >>
               rename >>
-              create
+              create >>
+              indexColumn.traverse_(createIndex(tgtFragment, _))
             case WriteMode.Truncate =>
               createTgtIfNotExists >>
+              idColumn.traverse_(createIndex(tgtFragment, _)) >>
               truncateTgt >>
               insertInto >>
               truncate
             case WriteMode.Append =>
               createTgtIfNotExists >>
+              idColumn.traverse_(createIndex(tgtFragment, _)) >>
               insertInto >>
               truncate
           }
-          prepare >> mbCreateIndex
         }
 
         def append: ConnectionIO[Unit] = {
