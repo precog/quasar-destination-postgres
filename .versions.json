@@ -1,5 +1,5 @@
 {
   "precog-quasar": "205.0.0",
   "precog-qdata": "15.0.23",
-  "precog-quasar-lib-jdbc": "0.35.2"
+  "precog-quasar-lib-jdbc": "0.35.3"
 }
