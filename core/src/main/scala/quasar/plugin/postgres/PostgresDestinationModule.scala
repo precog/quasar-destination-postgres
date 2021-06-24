@@ -85,7 +85,7 @@ object PostgresDestinationModule extends DestinationModule with Logging {
     val init = for {
       cfg <- EitherT(cfg0.pure[Resource[F, ?]])
 
-      suffix <- EitherT.right(Resource.liftF(randomAlphaNum[F](6)))
+      suffix <- EitherT.right(Resource.eval(randomAlphaNum[F](6)))
 
       awaitPool <- EitherT.right(awaitConnPool[F](s"pgdest-await-$suffix", ConnectionPoolSize))
 
@@ -93,16 +93,16 @@ object PostgresDestinationModule extends DestinationModule with Logging {
 
       xa <- EitherT.right(hikariTransactor[F](cfg, awaitPool, xaPool))
 
-      _ <- EitherT(Resource.liftF(validateConnection.transact(xa) recover {
+      _ <- EitherT(Resource.eval(validateConnection.transact(xa) recover {
         case NonFatal(ex: Exception) =>
           Left(DE.connectionFailed[Json, InitErr](destinationType, sanitizeDestinationConfig(config), ex))
       }))
 
-      _ <- EitherT.right[InitErr](Resource.liftF(Sync[F].delay(
+      _ <- EitherT.right[InitErr](Resource.eval(Sync[F].delay(
         log.info(s"Initialized postgres destination: tag = $suffix, config = ${cfg.sanitized.asJson}"))))
 
       logger <- EitherT.right[InitErr]{
-        Resource.liftF(Sync[F].delay(LoggerFactory(s"quasar.lib.destination.postgres-$suffix")))
+        Resource.eval(Sync[F].delay(LoggerFactory(s"quasar.lib.destination.postgres-$suffix")))
       }
 
     } yield new PostgresDestination(
