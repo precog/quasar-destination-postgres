@@ -34,7 +34,7 @@ import org.slf4s.{Logging, LoggerFactory}
 
 import quasar.api.destination.{DestinationError => DE, _}
 import quasar.concurrent._
-import quasar.connector.MonadResourceErr
+import quasar.connector.{GetAuth, MonadResourceErr}
 import quasar.connector.destination.{Destination, DestinationModule, PushmiPullyu}
 import quasar.lib.jdbc.destination.WriteMode
 
@@ -61,7 +61,8 @@ object PostgresDestinationModule extends DestinationModule with Logging {
 
   def destination[F[_]: ConcurrentEffect: ContextShift: MonadResourceErr: Timer](
       config: Json,
-      pushPull: PushmiPullyu[F])
+      pushPull: PushmiPullyu[F],
+      auth: GetAuth[F])
       : Resource[F, Either[InitErr, Destination[F]]] = {
 
     val cfg0: Either[InitErr, Config] =
