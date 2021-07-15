@@ -687,7 +687,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
     }
 
   def dest[A](cfg: Json)(f: Either[DM.InitErr, Destination[IO]] => IO[A]): IO[A] =
-    DM.destination[IO](cfg, _ => _ => Stream.empty).use(f)
+    DM.destination[IO](cfg, _ => _ => Stream.empty, _ => IO.pure(None)).use(f)
 
   trait Consumer[A]{
     def apply[R <: HList, K <: HList, V <: HList, T <: HList, S <: HList](
@@ -710,7 +710,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
   object Consumer {
     def upsert[A](cfg: Json, connectionUri: String): Resource[IO, Consumer[A]] = {
       val rsink: Resource[IO, ResultSink.UpsertSink[IO, ColumnType.Scalar, Byte]] =
-        DM.destination[IO](cfg, _ => _ => Stream.empty) evalMap {
+        DM.destination[IO](cfg, _ => _ => Stream.empty, _ => IO.pure(None)) evalMap {
           case Left(err) =>
             IO.raiseError(new RuntimeException(err.shows))
           case Right(dst) =>
@@ -757,7 +757,7 @@ object PostgresDestinationSpec extends EffectfulQSpec[IO] with CsvSupport with P
 
     def append[A](cfg: Json, connectionUri: String): Resource[IO, Consumer[A]] = {
       val rsink: Resource[IO, ResultSink.AppendSink[IO, ColumnType.Scalar]] =
-        DM.destination[IO](cfg, _ => _ => Stream.empty) evalMap {
+        DM.destination[IO](cfg, _ => _ => Stream.empty, _ => IO.pure(None)) evalMap {
           case Left(err) =>
             IO.raiseError(new RuntimeException(err.shows))
           case Right(dst) =>
