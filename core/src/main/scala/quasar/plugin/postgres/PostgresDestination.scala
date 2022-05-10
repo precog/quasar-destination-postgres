@@ -40,7 +40,8 @@ final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
     schema: Option[String],
     maxRetries: Int,
     retryTimeout: FiniteDuration,
-    logger: Logger)
+    logger: Logger,
+    writeChunkSize: Int = PostgresDestination.DefaultWriteChunkSize)
     extends LegacyDestination[F] with FlowSinks[F, ColumnType.Scalar, Byte] {
 
   val destinationType: DestinationType =
@@ -57,5 +58,10 @@ final class PostgresDestination[F[_]: Effect: MonadResourceErr: Timer](
   val flowLogger = logger
 
   val sinks: NonEmptyList[ResultSink[F, Type]] =
-    flowSinks
+    flowSinks.map(RechunkingSink[F, Type](writeChunkSize))
+}
+
+object PostgresDestination {
+  // Prefer to write chunks of at least 32MiB
+  val DefaultWriteChunkSize: Int = 32 * 1024 * 1024
 }
